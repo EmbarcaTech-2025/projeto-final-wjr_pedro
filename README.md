@@ -1,48 +1,56 @@
-# Mood Mirror Duo
+# Projeto Final Embarcatech — TheraLink
+**Alunos:** Wagner Junior e Pedro Henrique  
+**Local:** EmbarcaTech — Brasília
 
-**Autores:** Wagner Junior e Pedro Henrique  
-**EmbarcaTech - Brasília**
+---
 
-## 🧠 Problema a ser resolvido
+## 1) Problema a ser resolvido
+Em escolas e projetos sociais muitas vezes **não há internet estável**. Mesmo assim, psicólogos e educadores precisam iniciar atividades em **grupos grandes** (ex.: ~20 pessoas) com uma noção rápida do **estado do grupo**. Sem ferramentas simples e offline, o atendimento começa “no escuro”, com **alto atrito operacional** e risco de **decisões pouco informadas**.
 
-Em comunidades carentes, o acesso à saúde mental é limitado. Psicólogos precisam iniciar sessões de grupo sem saber como os participantes estão emocionalmente. O Mood Mirror Duo resolve isso com um sistema portátil, offline e anônimo que coleta auto-relato de humor e sinais fisiológicos, exibindo um painel visual para o terapeuta adaptar a sessão em tempo real.
+**TheraLink** oferece uma solução **de baixo custo, offline e de instalação imediata** para coletar um **check‑in** objetivo (BPM) e subjetivo (autoavaliação simples), fornecendo ao profissional uma **visão geral** para orientar a sessão.
 
-## ⚙️ Como funciona (simulação prática)
+---
 
-1. **Participante conecta ao Wi-Fi local da BitDog-A.**  
-   Página web é exibida com escala de humor e controle de ansiedade.
-2. **Preenche as informações e encosta o dedo no sensor (MAX30100).**
-3. **Escolhe uma cor que representa sua emoção e passa no sensor TCS34725.**
-4. **Os dados são enviados para a BitDog-B.**  
-   A terapeuta visualiza no OLED e matriz de LED um resumo do grupo.
-5. **Dados são salvos no microSD para análise posterior.**
+## 2) Simulação do funcionamento na prática
+- O dispositivo liga e cria um **ponto de acesso Wi‑Fi (AP)**.
+- O aluno coloca o dedo no **oxímetro MAX3010x**: o sistema mede **frequência cardíaca** e **SpO₂**.
+- Em seguida, no **OLED** com **joystick**, o aluno informa seu **nível de ansiedade** (escala numérica simples).  
+  *(Opcional)*: o **TCS34725** registra uma **cor** (vermelho/amarelo/verde) para expressão lúdica e inclusiva, útil com crianças.
+- Os dados passam por **validação** e são consolidados **em RAM** (contagens, médias, últimas leituras).
+- O profissional conecta o **celular/notebook** ao AP do dispositivo e acessa a **página local** (**HTML**) ou o **endpoint `/stats.json`** (**JSON**) para acompanhar **em tempo real** a média de BPM, contagens de cores e últimos registros.
+- O participante recebe **feedback imediato** via **OLED/LED/buzzer**.
 
-## ✅ Requisitos Funcionais (RF)
+---
 
-- RF01: Interface web com escala de humor e controle de ansiedade
-- RF02: Detecção de dedo via VL53L0X
-- RF03: Leitura de pulso e SpO₂ com MAX30100
-- RF04: Leitura de cor via TCS34725
-- RF05: Comunicação entre BitDog-A e BitDog-B
-- RF06: Visualização de dados em tempo real (OLED/matriz)
-- RF07: Logging dos dados em cartão microSD
+## 3) Requisitos Funcionais (RF)
+- **RF01.** Acesso via **portal web local** (HTML + JSON) hospedado pelo próprio dispositivo (sem internet).
+- **RF02.** Medição de **HR** e **SpO₂** com **MAX3010x**.
+- **RF03.** Registro do **nível de ansiedade** informado via **joystick** no **OLED**.
+- **RF04.** Leitura **opcional** de **cor** com **TCS34725** para expressão emocional lúdica.
+- **RF05.** **Consolidação de estatísticas em RAM**: contagens, médias e últimas leituras.
+- **RF06.** **Feedback imediato** ao usuário via **OLED**, **LEDs** e **buzzer**.
+- **RF07.** Disponibilização dos dados ao profissional em **tempo real** via **servidor HTTP local** (**`/stats.json`**).
 
-## 🧩 Requisitos Não Funcionais (RNF)
+---
 
-- RNF01: 100% offline
-- RNF02: Portátil (bateria ≥ 4h)
-- RNF03: Tempo de interação < 30s
-- RNF04: Interface inclusiva
-- RNF05: Dados anônimos (hash)
-- RNF06: Baixo custo
+## 4) Requisitos Não Funcionais (RNF)
+- **RNF01.** Funcionalidade **100% offline** (sem necessidade de internet).
+- **RNF02.** Operação em **power‑bank** por pelo menos **4 horas**.
+- **RNF03.** **Interação rápida**: até **30 segundos por pessoa**.
+- **RNF04.** Interface **inclusiva** com feedback **sonoro** e **visual**.
+- **RNF05.** Dados processados de forma **anônima** no dispositivo.
+- **RNF06.** **Custo acessível** e **montagem simples** (≤ 1 hora).
 
-## 📦 Lista de Materiais
+---
 
-- 2 × BitDogLab (com OLED, LED, buzzer, Wi-Fi)
-- 1 × MAX30100
-- 1 × VL53L0X
-- 1 × TCS34725
-- 1 × microSD + adaptador
-- Fios, fonte de energia (power bank), adesivos e cartões coloridos
+## 5) Lista inicial de materiais
+- **1× BitDogLab** (Raspberry Pi **Pico W** com OLED, matriz 5×5, joystick, buzzer, Wi‑Fi)
+- **1× Sensor MAX3010x** (HR/SpO₂)
+- **1× Sensor TCS34725** (cor RGB — *opcional*)
+- **Fios Dupont**, **fita dupla‑face**, **power‑bank**
+- *(Opcional)* Impressão de **tokens coloridos** e **etiqueta de instruções**
+
+---
+
 
 

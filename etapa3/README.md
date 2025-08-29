@@ -6,7 +6,7 @@ Este repositório contém a pasta **Etapa 3**, com registro de um vídeo testand
 ---
 
 ## 🎥 Vídeo (público)
-Link: https://www.youtube.com/watch?v=9OuNIAc0O_8  
+Link: https://youtu.be/Nda5O4mBOp4  
 
 ---
 

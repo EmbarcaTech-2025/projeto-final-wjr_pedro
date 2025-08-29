@@ -19,8 +19,8 @@
 #define CYW43_AUTH_WPA2_AES_PSK 4
 #endif
 
-#define AP_SSID  "MirrorDuo"
-#define AP_PASS  "12345678"
+#define AP_SSID  "TheraLink"
+#define AP_PASS  "theralink123"
 #define HTTP_PORT 80
 
 // ===== Servidores auxiliares =====

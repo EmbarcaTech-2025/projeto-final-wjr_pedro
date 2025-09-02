@@ -10,7 +10,7 @@ Link: https://youtu.be/Nda5O4mBOp4
 
 ---
 
-## 🧩 O que é o TheraLink (resumo rápido)
+## 🧩 O que é o TheraLink
 Dispositivo **offline** (BitDogLab / Pico W) que cria **Wi‑Fi próprio**, mede **batimentos (BPM)** no oxímetro e apresenta, numa **página web local**, um retrato rápido de **grupos grandes** (ex.: ~20 alunos). Inclui um marcador **lúdico por cores** e uma escala **1–4** simples para apoiar o profissional na visão geral do grupo — tudo **sem internet**.
 
 

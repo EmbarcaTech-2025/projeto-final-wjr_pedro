@@ -34,7 +34,7 @@ typedef struct {
 } http_tx_t;
 
 static http_tx_t g_tx = {0};
-static char g_resp[8192];   // resposta (HTML/JSON) fica aqui até terminar o envio
+static char g_resp[8192];   // resposta (HTML/JSON/CSV) fica aqui até terminar o envio
 
 /* Envia o que couber no buffer TCP; retorna true quando terminou */
 static bool http_send_chunk(struct tcp_pcb *tpcb) {
@@ -42,7 +42,7 @@ static bool http_send_chunk(struct tcp_pcb *tpcb) {
         u16_t wnd = tcp_sndbuf(tpcb);
         if (wnd == 0) break;
         u16_t chunk = g_tx.len - g_tx.off;
-        if (chunk > 1200) chunk = 1200;      // evite pacotes enormes
+        if (chunk > 1200) chunk = 1200;      // evita pacotes enormes
         if (chunk > wnd)  chunk = wnd;
         err_t e = tcp_write(tpcb, g_tx.buf + g_tx.off, chunk, TCP_WRITE_FLAG_COPY);
         if (e == ERR_MEM) break;             // buffer cheio; espera ACK (tcp_sent)
@@ -77,6 +77,7 @@ static void make_html(char *out, size_t outsz) {
         ".row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chip{font:12px monospace;background:#f3f3f3;border-radius:999px;padding:4px 8px}"
         "canvas{width:100%;height:220px;background:#fafafa;border:1px solid #eee;border-radius:8px}"
         "button{padding:8px 10px;border-radius:8px;border:1px solid #ddd;background:#fff}"
+        "a.btn{display:inline-block;padding:8px 10px;border-radius:8px;border:1px solid #ddd;background:#fff;text-decoration:none;color:#000}"
         "</style></head><body>"
         "<h1 style='font-size:20px;margin:0 0 12px'>TheraLink</h1>"
         "<div class=grid>"
@@ -88,6 +89,7 @@ static void make_html(char *out, size_t outsz) {
               "<span class=chip id=nchip>n=0</span>"
               "<span class=chip id=ts>--</span>"
               "<button onclick='hist=[];drawLine()'>Limpar</button>"
+              "<a class='btn' href='/session.csv'>Baixar CSV</a>"
             "</div>"
           "</div>"
           "<div class=card>"
@@ -138,7 +140,7 @@ static void make_html(char *out, size_t outsz) {
         "Connection: close\r\n\r\n%s", page);
 }
 
-/* -------------------- JSON -------------------- */
+/* -------------------- JSON (resumo) -------------------- */
 static void make_json(char *out, size_t outsz) {
     stats_snapshot_t s; stats_get_snapshot(&s);
     float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
@@ -163,6 +165,34 @@ static void make_json(char *out, size_t outsz) {
     );
 }
 
+/* -------------------- CSV (download) -------------------- */
+static void make_csv(char *out, size_t outsz) {
+    stats_snapshot_t s; stats_get_snapshot(&s);
+    float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
+    float ans_mean = isnan(s.ans_mean) ? 0.f : s.ans_mean;
+
+    // Cabeçalho HTTP com Content-Disposition para forçar download
+    int n = snprintf(out, outsz,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/csv; charset=UTF-8\r\n"
+        "Cache-Control: no-store\r\n"
+        "Content-Disposition: attachment; filename=\"theralink_session.csv\"\r\n"
+        "Connection: close\r\n\r\n"
+        "metric,value\r\n"
+        "bpm_mean,%.3f\r\n"
+        "bpm_n,%lu\r\n"
+        "ans_mean,%.3f\r\n"
+        "ans_n,%lu\r\n"
+        "cores_verde,%lu\r\n"
+        "cores_amarelo,%lu\r\n"
+        "cores_vermelho,%lu\r\n",
+        bpm_mean, (unsigned long)s.bpm_count,
+        ans_mean, (unsigned long)s.ans_count,
+        (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho
+    );
+    (void)n;
+}
+
 /* -------------------- HTTP -------------------- */
 static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     (void)arg; (void)err;
@@ -175,9 +205,11 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
     pbuf_free(p);
 
     bool want_json = (strncmp(req, "GET /stats.json", 15) == 0);
+    bool want_csv  = (strncmp(req, "GET /session.csv", 16) == 0);
 
-    if (want_json) make_json(g_resp, sizeof(g_resp));
-    else           make_html(g_resp, sizeof(g_resp));
+    if (want_csv)      make_csv (g_resp, sizeof(g_resp));
+    else if (want_json) make_json(g_resp, sizeof(g_resp));
+    else                make_html(g_resp, sizeof(g_resp));
 
     g_tx.buf = g_resp;
     g_tx.len = (u16_t)strlen(g_resp);

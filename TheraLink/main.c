@@ -1,5 +1,6 @@
 // main.c — Fluxo: pergunta A/B -> cor (opcional) -> oxímetro -> ansiedade (joystick)
 // Publica dados via AP (DHCP/DNS/HTTP) para acesso no celular/tablet da profissional.
+// A página /display apenas espelha as 4 linhas do OLED (ampliadas).
 
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
@@ -16,7 +17,7 @@
 #include "src/cor.h"         // cor_init, cor_read_rgb_norm, cor_classify, cor_class_to_str
 #include "src/oximetro.h"    // oxi_init, oxi_start, oxi_poll, oxi_get_state, ...
 #include "src/stats.h"       // stats_init, stats_add_bpm, stats_inc_color, stats_add_anxiety, stats_get_snapshot
-#include "src/web_ap.h"      // web_ap_start (AP + DHCP/DNS + HTTP)
+#include "src/web_ap.h"      // web_ap_start + web_display_set_lines (espelho do OLED)
 
 // ==== OLED em I2C1 (BitDog) ====
 #define OLED_I2C   i2c1
@@ -62,7 +63,11 @@ static void i2c_setup(i2c_inst_t *i2c, uint sda, uint scl, uint hz) {
     gpio_pull_up(scl);
 }
 
+// --- OLED + espelho web (/display)
 static void oled_lines(const char *l1, const char *l2, const char *l3, const char *l4) {
+    // espelha para a página /display
+    web_display_set_lines(l1, l2, l3, l4);
+
     if (!oled_ok) return;
     ssd1306_clear(&oled);
     if (l1) ssd1306_draw_string(&oled, 0,  0, 1, l1);
@@ -152,7 +157,7 @@ int main(void) {
 
     // Rede/AP + agregados
     stats_init();
-    web_ap_start(); // Sobe AP (SSID: MirrorDuo / 12345678), DHCP/DNS e HTTP (/ e /stats.json)
+    web_ap_start(); // Sobe AP TheraLink e HTTP (/ , /display, /stats.json, /download.csv)
 
     // Sensores (no I2C0 via extensor)
     bool cor_ready = false;
@@ -389,38 +394,38 @@ int main(void) {
             break;
 
         case ST_REPORT: {
-        // Atualiza a cada ~1s
-        if (now_ms - t_last > 1000) {
-            t_last = now_ms;
-            stats_snapshot_t snap; stats_get_snapshot(&snap);
+            // Atualiza a cada ~1s
+            if (now_ms - t_last > 1000) {
+                t_last = now_ms;
+                stats_snapshot_t snap; stats_get_snapshot(&snap);
 
-            char l1[22], l2[22], l3[22];
-            float bpm = snap.bpm_mean_trimmed;
-            float ans = snap.ans_mean;
+                char l1[22], l2[22], l3[22];
+                float bpm = snap.bpm_mean_trimmed;
+                float ans = snap.ans_mean;
 
-            if (isnan(bpm)) snprintf(l1, sizeof l1, "BPM: --");
-            else            snprintf(l1, sizeof l1, "BPM: %.1f (n=%lu)",
-                                    bpm, (unsigned long)snap.bpm_count);
+                if (isnan(bpm)) snprintf(l1, sizeof l1, "BPM: --");
+                else            snprintf(l1, sizeof l1, "BPM: %.1f (n=%lu)",
+                                         bpm, (unsigned long)snap.bpm_count);
 
-            snprintf(l2, sizeof l2, "V:%lu A:%lu R:%lu",
-                    (unsigned long)snap.cor_verde,
-                    (unsigned long)snap.cor_amarelo,
-                    (unsigned long)snap.cor_vermelho);
+                snprintf(l2, sizeof l2, "V:%lu A:%lu R:%lu",
+                        (unsigned long)snap.cor_verde,
+                        (unsigned long)snap.cor_amarelo,
+                        (unsigned long)snap.cor_vermelho);
 
-            if (isnan(ans)) snprintf(l3, sizeof l3, "Ans: --  Joy=sair");
-            else            snprintf(l3, sizeof l3, "Ans: %.2f (n=%lu)",
-                                    ans, (unsigned long)snap.ans_count);
+                if (isnan(ans)) snprintf(l3, sizeof l3, "Ans: --  Joy=sair");
+                else            snprintf(l3, sizeof l3, "Ans: %.2f (n=%lu)",
+                                         ans, (unsigned long)snap.ans_count);
 
-            // desenha exatamente 4 linhas (sem draw extra)
-            oled_lines("Relatorio Grupo", l1, l2, l3);
+                // desenha exatamente 4 linhas (sem draw extra)
+                oled_lines("Relatorio Grupo", l1, l2, l3);
+            }
+            if (joy_btn_edge) {
+                st = ST_ASK;
+            }
+            break;
         }
-        if (joy_btn_edge) {
-            st = ST_ASK;
-        }
-        break;
-    }
 
-        }
+        } // switch(st)
 
         sleep_ms(10);
     }

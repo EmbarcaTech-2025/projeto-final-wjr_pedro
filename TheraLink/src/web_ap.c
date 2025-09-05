@@ -1,4 +1,9 @@
-// src/web_ap.c
+// Web AP com 3 rotas principais:
+//   /             -> Painel profissional (gráficos)
+//   /display      -> Espelho do OLED (4 linhas ampliadas)
+//   /oled.json    -> JSON com as 4 linhas atuais do OLED
+//   /stats.json   -> Métricas agregadas (já existentes)
+//   /download.csv -> CSV simples (fallback local)
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -19,14 +24,28 @@
 #define CYW43_AUTH_WPA2_AES_PSK 4
 #endif
 
-#define AP_SSID  "TheraLink"
-#define AP_PASS  "theralink123"
+#define AP_SSID   "TheraLink"
+#define AP_PASS   "theralink123"
 #define HTTP_PORT 80
 
 static dhcp_server_t s_dhcp;
 static dns_server_t  s_dns;
 
-/* --------- TX state (1 conexão por vez é suficiente p/ nosso uso) --------- */
+/* ---------- Estado OLED (espelho) ---------- */
+typedef struct {
+    char l1[32], l2[32], l3[32], l4[32];
+} oled_state_t;
+
+static oled_state_t g_oled = { "", "", "", "" };
+
+void web_display_set_lines(const char *l1, const char *l2, const char *l3, const char *l4) {
+    snprintf(g_oled.l1, sizeof g_oled.l1, "%s", l1 ? l1 : "");
+    snprintf(g_oled.l2, sizeof g_oled.l2, "%s", l2 ? l2 : "");
+    snprintf(g_oled.l3, sizeof g_oled.l3, "%s", l3 ? l3 : "");
+    snprintf(g_oled.l4, sizeof g_oled.l4, "%s", l4 ? l4 : "");
+}
+
+/* ---------- TX state (1 conexão por vez) ---------- */
 typedef struct {
     const char *buf;
     u16_t len;
@@ -34,19 +53,18 @@ typedef struct {
 } http_tx_t;
 
 static http_tx_t g_tx = {0};
-static char g_resp[8192];   // resposta (HTML/JSON/CSV) fica aqui até terminar o envio
+static char g_resp[8192]; // HTML/JSON/CSV é montado aqui
 
-/* Envia o que couber no buffer TCP; retorna true quando terminou */
 static bool http_send_chunk(struct tcp_pcb *tpcb) {
     while (g_tx.off < g_tx.len) {
         u16_t wnd = tcp_sndbuf(tpcb);
-        if (wnd == 0) break;
+        if (!wnd) break;
         u16_t chunk = g_tx.len - g_tx.off;
-        if (chunk > 1200) chunk = 1200;      // evita pacotes enormes
+        if (chunk > 1200) chunk = 1200;
         if (chunk > wnd)  chunk = wnd;
         err_t e = tcp_write(tpcb, g_tx.buf + g_tx.off, chunk, TCP_WRITE_FLAG_COPY);
-        if (e == ERR_MEM) break;             // buffer cheio; espera ACK (tcp_sent)
-        if (e != ERR_OK)  { tcp_abort(tpcb); return true; } // erro fatal
+        if (e == ERR_MEM) break;
+        if (e != ERR_OK) { tcp_abort(tpcb); return true; }
         g_tx.off += chunk;
     }
     tcp_output(tpcb);
@@ -63,23 +81,29 @@ static err_t http_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
     return ERR_OK;
 }
 
-/* -------------------- PÁGINA HTML -------------------- */
-static void make_html(char *out, size_t outsz) {
+/* ---------- HTML: Painel Profissional (/) ---------- */
+static void make_html_pro(char *out, size_t outsz) {
     const char *body =
-        "<!doctype html><html><head><meta charset=utf-8>"
+        "<!doctype html><html lang=pt-br><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>TheraLink</title>"
+        "<title>TheraLink — Profissional</title>"
         "<style>"
-        "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px}"
+        "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#f6f7fb;color:#111}"
+        "nav{display:flex;gap:12px;margin-bottom:12px}"
+        "nav a{padding:8px 12px;border:1px solid #ddd;background:#fff;border-radius:10px;text-decoration:none;color:#111}"
         ".grid{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:760px){.grid{grid-template-columns:1fr 1fr}}"
-        ".card{border:1px solid #ddd;border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.06)}"
-        ".title{margin:0 0 8px;font-size:18px}.kpi{font-size:34px;font-weight:700;margin:6px 0}"
-        ".row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chip{font:12px monospace;background:#f3f3f3;border-radius:999px;padding:4px 8px}"
-        "canvas{width:100%;height:220px;background:#fafafa;border:1px solid #eee;border-radius:8px}"
-        "button{padding:8px 10px;border-radius:8px;border:1px solid #ddd;background:#fff}"
-        "a.btn{display:inline-block;padding:8px 10px;border-radius:8px;border:1px solid #ddd;background:#fff;text-decoration:none;color:#000}"
+        ".card{border:1px solid #e6e6e9;border-radius:14px;padding:14px;background:#fff;box-shadow:0 4px 20px rgba(0,0,0,.04)}"
+        ".title{margin:0 0 8px;font-size:18px}.kpi{font-size:34px;font-weight:800;margin:6px 0}"
+        ".row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chip{font:12px monospace;background:#f1f1f5;border-radius:999px;padding:4px 8px}"
+        "canvas{width:100%;height:220px;background:#fafafa;border:1px solid #eee;border-radius:10px}"
+        "button{padding:8px 10px;border-radius:10px;border:1px solid #ddd;background:#fff}"
         "</style></head><body>"
-        "<h1 style='font-size:20px;margin:0 0 12px'>TheraLink</h1>"
+        "<nav>"
+          "<a href='/'>Profissional</a>"
+          "<a href='/display'>Display</a>"
+          "<a href='/download.csv'>Baixar CSV</a>"
+        "</nav>"
+        "<h1 style='font-size:20px;margin:6px 0 12px'>Painel — Profissional</h1>"
         "<div class=grid>"
           "<div class=card>"
             "<div class=title>BPM (ao vivo / m&eacute;dia)</div>"
@@ -89,7 +113,6 @@ static void make_html(char *out, size_t outsz) {
               "<span class=chip id=nchip>n=0</span>"
               "<span class=chip id=ts>--</span>"
               "<button onclick='hist=[];drawLine()'>Limpar</button>"
-              "<a class='btn' href='/session.csv'>Baixar CSV</a>"
             "</div>"
           "</div>"
           "<div class=card>"
@@ -126,26 +149,81 @@ static void make_html(char *out, size_t outsz) {
             "document.getElementById('nchip').textContent='n='+s.bpm_n;document.getElementById('ts').textContent=ts();"
             "const plotted=live||s.bpm_mean||0; if(plotted){hist.push(plotted); if(hist.length>maxPts)hist.shift(); drawLine();}"
             "drawBars(s.cores.verde||0,s.cores.amarelo||0,s.cores.vermelho||0);"
-          "}catch(e){/* ok ficar quieto se desconectar */}}"
+          "}catch(e){}}"
         "setInterval(tick,1000); tick();"
         "</script></body></html>";
-
-    static char page[7600];
-    snprintf(page, sizeof page, "%s", body);
 
     snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/html; charset=UTF-8\r\n"
         "Cache-Control: no-store\r\n"
-        "Connection: close\r\n\r\n%s", page);
+        "Connection: close\r\n\r\n%s", body);
 }
 
-/* -------------------- JSON (resumo) -------------------- */
-static void make_json(char *out, size_t outsz) {
+/* ---------- HTML: Display (espelho do OLED) ---------- */
+static void make_html_display(char *out, size_t outsz) {
+    const char *body =
+        "<!doctype html><html lang=pt-br><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>TheraLink — Display</title>"
+        "<style>"
+        "html,body{height:100%;margin:0}"
+        "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;"
+              "background:radial-gradient(60% 80% at 50% 10%,#171a20,#0e1014);color:#f2f4f8;"
+              "display:flex;align-items:center;justify-content:center}"
+        ".panel{width:min(960px,94vw);padding:24px 22px;border-radius:20px;"
+               "background:linear-gradient(180deg,#141821,#101218);"
+               "box-shadow:0 12px 40px rgba(0,0,0,.45),inset 0 1px rgba(255,255,255,.05)}"
+        ".hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;opacity:.9}"
+        ".hdr .brand{font-weight:700;letter-spacing:.3px}"
+        ".btn{font-size:12px;padding:6px 10px;border-radius:10px;border:1px solid #303440;background:#1a1f2b;color:#f2f4f8}"
+        ".lines{display:grid;gap:6px;margin-top:8px}"
+        ".line{min-height:1lh;font-weight:800;letter-spacing:.5px;text-shadow:0 2px 10px rgba(0,0,0,.25);"
+               "padding:2px 4px;border-radius:8px}"
+        "#l1{font-size:clamp(20px,6.2vh,36px)}"
+        "#l2{font-size:clamp(22px,7.2vh,44px)}"
+        "#l3{font-size:clamp(22px,7.2vh,44px)}"
+        "#l4{font-size:clamp(22px,7.2vh,44px)}"
+        ".fade{animation:fade .22s ease}"
+        "@keyframes fade{from{opacity:.45;transform:translateY(1px)}to{opacity:1;transform:none}}"
+        "</style></head><body>"
+        "<div class=panel>"
+          "<div class=hdr>"
+            "<div class=brand>TheraLink — Display</div>"
+            "<button class=btn onclick='fs()'>Tela cheia</button>"
+          "</div>"
+          "<div class=lines>"
+            "<div id=l1 class='line'>&nbsp;</div>"
+            "<div id=l2 class='line'>&nbsp;</div>"
+            "<div id=l3 class='line'>&nbsp;</div>"
+            "<div id=l4 class='line'>&nbsp;</div>"
+          "</div>"
+        "</div>"
+        "<script>"
+        "function fs(){const d=document.documentElement; if(d.requestFullscreen) d.requestFullscreen();}"
+        "let last=['','','',''];"
+        "async function tick(){try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();"
+          "const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
+          "for(let i=0;i<4;i++){if(arr[i]!==last[i]){last[i]=arr[i];const id='l'+(i+1),el=document.getElementById(id);"
+            "el.classList.remove('fade'); el.textContent=arr[i]||'\\u00A0'; void el.offsetWidth; el.classList.add('fade');}}"
+        "}catch(e){}}"
+        "setInterval(tick,500); tick();"
+        "</script></body></html>";
+
+    snprintf(out, outsz,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html; charset=UTF-8\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n\r\n%s", body);
+}
+
+/* ---------- JSON: stats (/stats.json) ---------- */
+static void make_json_stats(char *out, size_t outsz) {
     stats_snapshot_t s; stats_get_snapshot(&s);
     float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
     float ans_mean = isnan(s.ans_mean) ? 0.f : s.ans_mean;
-    const float bpm_live = 0.f; // se quiser “ao vivo”, exponha em stats.c/h
+
+    const float bpm_live = 0.f; 
 
     snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
@@ -165,35 +243,50 @@ static void make_json(char *out, size_t outsz) {
     );
 }
 
-/* -------------------- CSV (download) -------------------- */
-static void make_csv(char *out, size_t outsz) {
-    stats_snapshot_t s; stats_get_snapshot(&s);
-    float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
-    float ans_mean = isnan(s.ans_mean) ? 0.f : s.ans_mean;
-
-    // Cabeçalho HTTP com Content-Disposition para forçar download
-    int n = snprintf(out, outsz,
+/* ---------- JSON: OLED (/oled.json) ---------- */
+static void make_json_oled(char *out, size_t outsz) {
+    
+    snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/csv; charset=UTF-8\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n"
         "Cache-Control: no-store\r\n"
-        "Content-Disposition: attachment; filename=\"theralink_session.csv\"\r\n"
         "Connection: close\r\n\r\n"
-        "metric,value\r\n"
-        "bpm_mean,%.3f\r\n"
-        "bpm_n,%lu\r\n"
-        "ans_mean,%.3f\r\n"
-        "ans_n,%lu\r\n"
-        "cores_verde,%lu\r\n"
-        "cores_amarelo,%lu\r\n"
-        "cores_vermelho,%lu\r\n",
-        bpm_mean, (unsigned long)s.bpm_count,
-        ans_mean, (unsigned long)s.ans_count,
-        (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho
+        "{"
+          "\"l1\":\"%s\","
+          "\"l2\":\"%s\","
+          "\"l3\":\"%s\","
+          "\"l4\":\"%s\""
+        "}",
+        g_oled.l1, g_oled.l2, g_oled.l3, g_oled.l4
     );
-    (void)n;
 }
 
-/* -------------------- HTTP -------------------- */
+/* ---------- CSV (fallback simples) ---------- */
+static size_t dump_csv_fallback(char *out, size_t maxlen) {
+    stats_snapshot_t s; stats_get_snapshot(&s);
+    return snprintf(out, maxlen,
+        "bpm_mean,bpm_n,verde,amarelo,vermelho,ans_mean,ans_n\r\n"
+        "%.3f,%lu,%lu,%lu,%lu,%.3f,%lu\r\n",
+        (double)(isnan(s.bpm_mean_trimmed)?0.f:s.bpm_mean_trimmed),
+        (unsigned long)s.bpm_count,
+        (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho,
+        (double)(isnan(s.ans_mean)?0.f:s.ans_mean),
+        (unsigned long)s.ans_count
+    );
+}
+static void make_csv(char *out, size_t outsz) {
+    size_t hdr = snprintf(out, outsz,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/csv; charset=UTF-8\r\n"
+        "Content-Disposition: attachment; filename=\"theralink_dados.csv\"\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n\r\n");
+    if (hdr >= outsz) return;
+    size_t max_csv = outsz - hdr;
+    (void)dump_csv_fallback(out + hdr, max_csv);
+}
+
+/* ---------- HTTP ---------- */
 static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     (void)arg; (void)err;
     if (!p) { tcp_close(tpcb); return ERR_OK; }
@@ -204,12 +297,16 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
     tcp_recved(tpcb, p->tot_len);
     pbuf_free(p);
 
-    bool want_json = (strncmp(req, "GET /stats.json", 15) == 0);
-    bool want_csv  = (strncmp(req, "GET /session.csv", 16) == 0);
+    bool want_stats   = (strncmp(req, "GET /stats.json",   15) == 0);
+    bool want_oled    = (strncmp(req, "GET /oled.json",    14) == 0);
+    bool want_display = (strncmp(req, "GET /display",      12) == 0);
+    bool want_csv     = (strncmp(req, "GET /download.csv", 18) == 0);
 
-    if (want_csv)      make_csv (g_resp, sizeof(g_resp));
-    else if (want_json) make_json(g_resp, sizeof(g_resp));
-    else                make_html(g_resp, sizeof(g_resp));
+    if      (want_stats)   make_json_stats(g_resp, sizeof g_resp);
+    else if (want_oled)    make_json_oled (g_resp, sizeof g_resp);
+    else if (want_display) make_html_display(g_resp, sizeof g_resp);
+    else if (want_csv)     make_csv(g_resp, sizeof g_resp);
+    else                   make_html_pro(g_resp, sizeof g_resp);
 
     g_tx.buf = g_resp;
     g_tx.len = (u16_t)strlen(g_resp);
@@ -239,7 +336,7 @@ static void http_start(void) {
 }
 
 void web_ap_start(void) {
-    stats_init();
+    stats_init(); 
 
     if (cyw43_arch_init()) { printf("WiFi init falhou\n"); return; }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);

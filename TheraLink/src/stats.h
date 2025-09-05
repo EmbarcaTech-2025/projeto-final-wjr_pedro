@@ -1,14 +1,15 @@
-// Evita conflito com lwIP (que também tem stats_init)
+// Evita conflito com lwIP (que também tem stats_*)
 #define stats_init          appstats_init
 #define stats_add_bpm       appstats_add_bpm
 #define stats_inc_color     appstats_inc_color
 #define stats_add_anxiety   appstats_add_anxiety
 #define stats_get_snapshot  appstats_get_snapshot
-
+#define stats_dump_csv      appstats_dump_csv   // <- novo
 
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>   // size_t
 
 typedef struct {
     uint32_t sample_id;
@@ -32,8 +33,13 @@ typedef enum {
     STAT_COLOR_COUNT
 } stat_color_t;
 
-void stats_init(void);
-void stats_add_bpm(float bpm);
-void stats_inc_color(stat_color_t c);
-void stats_add_anxiety(uint8_t level);
-void stats_get_snapshot(stats_snapshot_t *out);
+void   stats_init(void);
+void   stats_add_bpm(float bpm);
+void   stats_inc_color(stat_color_t c);
+void   stats_add_anxiety(uint8_t level);
+void   stats_get_snapshot(stats_snapshot_t *out);
+
+// Gera CSV agregado para download (/download.csv)
+// Cabeçalho + 1 linha com os valores atuais.
+// Retorna quantidade de bytes escritos (<= maxlen)
+size_t stats_dump_csv(char *dst, size_t maxlen);

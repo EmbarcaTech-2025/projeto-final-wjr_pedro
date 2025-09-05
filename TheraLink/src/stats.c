@@ -1,6 +1,7 @@
 #include "stats.h"
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 #define MAX_BPM_SAMPLES 64
 
@@ -81,4 +82,41 @@ void stats_get_snapshot(stats_snapshot_t *out) {
 
     out->ans_count = s_ans_count;
     out->ans_mean  = (s_ans_count ? (float)(s_ans_sum / (double)s_ans_count) : NAN);
+}
+
+// CSV agregado para /download.csv
+// Cabeçalho + linha com os valores atuais:
+// bpm_mean,bpm_n,ans_mean,ans_n,cores_verde,cores_amarelo,cores_vermelho
+size_t stats_dump_csv(char *dst, size_t maxlen) {
+    if (!dst || maxlen == 0) return 0;
+
+    stats_snapshot_t s;
+    stats_get_snapshot(&s);
+
+    // Se vier NaN, substitui por 0 para não imprimir "nan"
+    double bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.0 : s.bpm_mean_trimmed;
+    double ans_mean = isnan(s.ans_mean)         ? 0.0 : s.ans_mean;
+
+    size_t total = 0;
+
+    // Cabeçalho
+    int w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0,
+                     "bpm_mean,bpm_n,ans_mean,ans_n,cores_verde,cores_amarelo,cores_vermelho\r\n");
+    if (w < 0) return total;
+    total += (size_t)((w > 0) ? w : 0);
+    if (total >= maxlen) return maxlen;
+
+    // Linha de dados
+    w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0,
+                 "%.3f,%lu,%.3f,%lu,%lu,%lu,%lu\r\n",
+                 bpm_mean,  (unsigned long)s.bpm_count,
+                 ans_mean,  (unsigned long)s.ans_count,
+                 (unsigned long)s.cor_verde,
+                 (unsigned long)s.cor_amarelo,
+                 (unsigned long)s.cor_vermelho);
+    if (w < 0) return total;
+    total += (size_t)((w > 0) ? w : 0);
+
+    if (total > maxlen) total = maxlen;
+    return total;
 }

@@ -23,11 +23,10 @@
 #ifndef CYW43_AUTH_WPA2_AES_PSK
 #define CYW43_AUTH_WPA2_AES_PSK 4
 #endif
-#ifndef CYW43_AUTH_OPEN
-#define CYW43_AUTH_OPEN 0
-#endif
 
 #define AP_SSID   "TheraLink"
+// AP aberto (sem senha)
+#define AP_PASS   ""
 #define HTTP_PORT 80
 
 static dhcp_server_t s_dhcp;
@@ -96,9 +95,10 @@ static void make_html_pro(char *out, size_t outsz) {
         ".grid{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:760px){.grid{grid-template-columns:1fr 1fr}}"
         ".card{border:1px solid #e6e6e9;border-radius:14px;padding:14px;background:#fff;box-shadow:0 4px 20px rgba(0,0,0,.04)}"
         ".title{margin:0 0 8px;font-size:18px}.kpi{font-size:34px;font-weight:800;margin:6px 0}"
-        ".row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chip{font:12px monospace;background:#f1f1f5;border-radius:999px;padding:4px 8px}"
+        ".row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.chip{font:12px monospace;background:#f1f1f5;border-radius:999px;padding:4px 8px}"
         "canvas{width:100%;height:220px;background:#fafafa;border:1px solid #eee;border-radius:10px}"
         "button{padding:8px 10px;border-radius:10px;border:1px solid #ddd;background:#fff}"
+        ".mini .kpi{font-size:26px;margin:4px 0}"
         "</style></head><body>"
         "<nav>"
           "<a href='/'>Profissional</a>"
@@ -119,9 +119,15 @@ static void make_html_pro(char *out, size_t outsz) {
           "</div>"
           "<div class=card>"
             "<div class=title>Resumo</div>"
-            "<div class=row style='gap:20px'>"
-              "<div><div style='font-size:12px;color:#666'>Ansiedade m&eacute;dia</div>"
-              "<div id=ans class=kpi>--</div></div>"
+            "<div class=row>"
+              "<div class=mini>"
+                "<div style='font-size:12px;color:#666'>Ansiedade m&eacute;dia</div>"
+                "<div id=ans class=kpi>--</div>"
+                "<div style='font-size:12px;color:#666;margin-top:4px'>Energia m&eacute;dia</div>"
+                "<div id=ene class=kpi>--</div>"
+                "<div style='font-size:12px;color:#666;margin-top:4px'>Humor m&eacute;dio</div>"
+                "<div id=hum class=kpi>--</div>"
+              "</div>"
               "<div style='flex:1'><canvas id=bars></canvas></div>"
             "</div>"
           "</div>"
@@ -148,6 +154,8 @@ static void make_html_pro(char *out, size_t outsz) {
             "const main=live||s.bpm_mean||0;"
             "document.getElementById('bigBpm').textContent=main?main.toFixed(1):'--';"
             "document.getElementById('ans').textContent=(s.ans_mean>0)?s.ans_mean.toFixed(2):'--';"
+            "document.getElementById('ene').textContent=(s.energy_mean>0)?s.energy_mean.toFixed(2):'--';"
+            "document.getElementById('hum').textContent=(s.humor_mean>0)?s.humor_mean.toFixed(2):'--';"
             "document.getElementById('nchip').textContent='n='+s.bpm_n;document.getElementById('ts').textContent=ts();"
             "const plotted=live||s.bpm_mean||0; if(plotted){hist.push(plotted); if(hist.length>maxPts)hist.shift(); drawLine();}"
             "drawBars(s.cores.verde||0,s.cores.amarelo||0,s.cores.vermelho||0);"
@@ -224,6 +232,8 @@ static void make_json_stats(char *out, size_t outsz) {
     stats_snapshot_t s; stats_get_snapshot(&s);
     float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
     float ans_mean = isnan(s.ans_mean) ? 0.f : s.ans_mean;
+    float ene_mean = isnan(s.energy_mean) ? 0.f : s.energy_mean;
+    float hum_mean = isnan(s.humor_mean) ? 0.f : s.humor_mean;
 
     const float bpm_live = 0.f;
 
@@ -236,18 +246,21 @@ static void make_json_stats(char *out, size_t outsz) {
           "\"bpm_live\":%.3f,"
           "\"bpm_mean\":%.3f,\"bpm_n\":%lu,"
           "\"cores\":{\"verde\":%lu,\"amarelo\":%lu,\"vermelho\":%lu},"
-          "\"ans_mean\":%.3f,\"ans_n\":%lu"
+          "\"ans_mean\":%.3f,\"ans_n\":%lu,"
+          "\"energy_mean\":%.3f,\"energy_n\":%lu,"
+          "\"humor_mean\":%.3f,\"humor_n\":%lu"
         "}",
         bpm_live,
         bpm_mean, (unsigned long)s.bpm_count,
         (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho,
-        ans_mean, (unsigned long)s.ans_count
+        ans_mean, (unsigned long)s.ans_count,
+        ene_mean, (unsigned long)s.energy_count,
+        hum_mean, (unsigned long)s.humor_count
     );
 }
 
 /* ---------- JSON: OLED (/oled.json) ---------- */
 static void make_json_oled(char *out, size_t outsz) {
-
     snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: application/json; charset=UTF-8\r\n"
@@ -265,15 +278,23 @@ static void make_json_oled(char *out, size_t outsz) {
 
 /* ---------- CSV (fallback simples) ---------- */
 static size_t dump_csv_fallback(char *out, size_t maxlen) {
+    // Se você já está usando stats_dump_csv no seu projeto, pode remover este fallback e chamar stats_dump_csv direto.
     stats_snapshot_t s; stats_get_snapshot(&s);
+    double bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.0 : s.bpm_mean_trimmed;
+    double ans_mean = isnan(s.ans_mean)         ? 0.0 : s.ans_mean;
+    double ene_mean = isnan(s.energy_mean)      ? 0.0 : s.energy_mean;
+    double hum_mean = isnan(s.humor_mean)       ? 0.0 : s.humor_mean;
+
     return snprintf(out, maxlen,
-        "bpm_mean,bpm_n,verde,amarelo,vermelho,ans_mean,ans_n\r\n"
-        "%.3f,%lu,%lu,%lu,%lu,%.3f,%lu\r\n",
-        (double)(isnan(s.bpm_mean_trimmed)?0.f:s.bpm_mean_trimmed),
-        (unsigned long)s.bpm_count,
-        (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho,
-        (double)(isnan(s.ans_mean)?0.f:s.ans_mean),
-        (unsigned long)s.ans_count
+        "bpm_mean,bpm_n,ans_mean,ans_n,energy_mean,energy_n,humor_mean,humor_n,verde,amarelo,vermelho\r\n"
+        "%.3f,%lu,%.3f,%lu,%.3f,%lu,%.3f,%lu,%lu,%lu,%lu\r\n",
+        bpm_mean,  (unsigned long)s.bpm_count,
+        ans_mean,  (unsigned long)s.ans_count,
+        ene_mean,  (unsigned long)s.energy_count,
+        hum_mean,  (unsigned long)s.humor_count,
+        (unsigned long)s.cor_verde,
+        (unsigned long)s.cor_amarelo,
+        (unsigned long)s.cor_vermelho
     );
 }
 static void make_csv(char *out, size_t outsz) {
@@ -286,6 +307,8 @@ static void make_csv(char *out, size_t outsz) {
     if (hdr >= outsz) return;
     size_t max_csv = outsz - hdr;
     (void)dump_csv_fallback(out + hdr, max_csv);
+    // Alternativa (se preferir usar a função do stats.c):
+    // (void)stats_dump_csv(out + hdr, max_csv);
 }
 
 /* ---------- HTTP ---------- */
@@ -338,14 +361,14 @@ static void http_start(void) {
 }
 
 void web_ap_start(void) {
-    stats_init();
+    stats_init(); 
 
     if (cyw43_arch_init()) { printf("WiFi init falhou\n"); return; }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
 
-    // AP ABERTO (sem senha)
+    // AP aberto (sem senha)
     cyw43_arch_enable_ap_mode(AP_SSID, NULL, CYW43_AUTH_OPEN);
-    printf("AP SSID=%s (sem senha)\n", AP_SSID);
+    printf("AP SSID=%s (aberto, sem senha)\n", AP_SSID);
 
     ip4_addr_t gw, mask;
     IP4_ADDR(ip_2_ip4(&gw),   192,168,4,1);

@@ -23,9 +23,11 @@
 #ifndef CYW43_AUTH_WPA2_AES_PSK
 #define CYW43_AUTH_WPA2_AES_PSK 4
 #endif
+#ifndef CYW43_AUTH_OPEN
+#define CYW43_AUTH_OPEN 0
+#endif
 
 #define AP_SSID   "TheraLink"
-#define AP_PASS   "theralink123"
 #define HTTP_PORT 80
 
 static dhcp_server_t s_dhcp;
@@ -223,7 +225,7 @@ static void make_json_stats(char *out, size_t outsz) {
     float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
     float ans_mean = isnan(s.ans_mean) ? 0.f : s.ans_mean;
 
-    const float bpm_live = 0.f; 
+    const float bpm_live = 0.f;
 
     snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
@@ -245,7 +247,7 @@ static void make_json_stats(char *out, size_t outsz) {
 
 /* ---------- JSON: OLED (/oled.json) ---------- */
 static void make_json_oled(char *out, size_t outsz) {
-    
+
     snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: application/json; charset=UTF-8\r\n"
@@ -336,13 +338,14 @@ static void http_start(void) {
 }
 
 void web_ap_start(void) {
-    stats_init(); 
+    stats_init();
 
     if (cyw43_arch_init()) { printf("WiFi init falhou\n"); return; }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
 
-    cyw43_arch_enable_ap_mode(AP_SSID, AP_PASS, CYW43_AUTH_WPA2_AES_PSK);
-    printf("AP SSID=%s PASS=%s\n", AP_SSID, AP_PASS);
+    // AP ABERTO (sem senha)
+    cyw43_arch_enable_ap_mode(AP_SSID, NULL, CYW43_AUTH_OPEN);
+    printf("AP SSID=%s (sem senha)\n", AP_SSID);
 
     ip4_addr_t gw, mask;
     IP4_ADDR(ip_2_ip4(&gw),   192,168,4,1);

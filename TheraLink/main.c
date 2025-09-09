@@ -128,8 +128,8 @@ static joy_events_t joystick_poll(void) {
 // ---------- Estados ----------
 typedef enum {
     ST_ASK = 0,        // Pergunta inicial
-    ST_COLOR_PREP,     // Mensagem de instrução para cor
-    ST_COLOR_LOOP,     // Loop de leitura de cor (A captura)
+    ST_COLOR_PREP,     // Tela de instrução (5s)
+    ST_COLOR_LOOP,     // Lê cor + mostra legenda e resultado
     ST_OXI_PREP,       // Inicializa/ativa oxímetro
     ST_OXI_RUN,        // Oxímetro rodando
     ST_SHOW_BPM,       // Mostra BPM final por ~3s
@@ -167,7 +167,7 @@ int main(void) {
     state_t st = ST_ASK;
     state_t last_st = (state_t)-1;
     uint32_t t_last = 0;
-    uint32_t show_until_ms = 0; // para telas temporárias (3s)
+    uint32_t show_until_ms = 0; // para telas temporárias (e.g., 3s / 5s)
     int ans_level = 2;          // nível de ansiedade padrão (1..4)
 
     while (true) {
@@ -190,9 +190,11 @@ int main(void) {
                     oled_lines("Fazer leitura de cor?", "(A) Sim   (B) Nao", "Botao Joy: Relatorio", "");
                     break;
                 case ST_COLOR_PREP:
-                    oled_lines("Lendo Cor...", "Aperte A p/ capturar", "Posicione o cartao", "");
+                    // tela curta de instrução (5s)
+                    oled_lines("Selecao de cor", "Aproxime a pulseira", "no sensor", "");
                     break;
                 case ST_COLOR_LOOP:
+                    // render atualizada no loop
                     break;
                 case ST_OXI_PREP:
                     oled_lines("Oximetro ativando...", "Posicione o dedo", "", "");
@@ -228,6 +230,8 @@ int main(void) {
                     st = ST_OXI_PREP;
                 } else {
                     st = ST_COLOR_PREP;
+                    show_until_ms = now_ms + 5000; // 5 segundos de instrução
+                    t_last = now_ms;
                 }
             } else if (b_edge) {
                 // Pula direto para oxímetro
@@ -239,7 +243,11 @@ int main(void) {
             break;
 
         case ST_COLOR_PREP:
-            if (now_ms - t_last > 250) { t_last = now_ms; st = ST_COLOR_LOOP; }
+            // aguarda 5s e então vai para a tela com legenda + leitura
+            if ((int32_t)(show_until_ms - now_ms) <= 0) {
+                st = ST_COLOR_LOOP;
+                t_last = now_ms;
+            }
             break;
 
         case ST_COLOR_LOOP: {
@@ -252,16 +260,17 @@ int main(void) {
                     cor_class_t cls = cor_classify(rf, gf, bf, cf);
                     const char *nome = cor_class_to_str(cls);
 
-                    char l3[24], l4[24];
-                    int R = (int)(rf * 255.0f + 0.5f);
-                    int G = (int)(gf * 255.0f + 0.5f);
-                    int B = (int)(bf * 255.0f + 0.5f);
-
-                    snprintf(l3, sizeof l3, "Cor: %s", nome);
-                    snprintf(l4, sizeof l4, "R%3d G%3d B%3d", R, G, B);
-                    oled_lines("Lendo Cor...", "Aperte A p/ capturar", l3, l4);
+                    char l4[24];
+                    snprintf(l4, sizeof l4, "Cor: %s  A=OK", nome);
+                    oled_lines("Verde=Bem",
+                               "Amarelo=Medio",
+                               "Vermelho=Apoio",
+                               l4);
                 } else {
-                    oled_lines("Lendo Cor...", "Aperte A p/ capturar", "Sem leitura", "");
+                    oled_lines("Verde = Bem",
+                               "Amarelo = Medio",
+                               "Vermelho = Apoio",
+                               "Cor: --   A = OK");
                 }
             }
 
@@ -290,7 +299,7 @@ int main(void) {
                     show_until_ms = now_ms + 3000;  // ~3s na tela
                     st = ST_OXI_PREP;               // segue para oxímetro
                 } else {
-                    oled_lines("Falha na leitura", "Tente novamente", "", "");
+                    oled_lines("Falha na leitura", "Reaproxime a pulseira", "", "");
                     sleep_ms(800);
                 }
             }

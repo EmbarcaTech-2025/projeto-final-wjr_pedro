@@ -1,8 +1,8 @@
 // Web AP com 3 rotas principais:
-//   /             -> Painel profissional (gráficos)
+//   /             -> Painel profissional (gráficos + filtros por cor)
 //   /display      -> Espelho do OLED (4 linhas ampliadas)
 //   /oled.json    -> JSON com as 4 linhas atuais do OLED
-//   /stats.json   -> Métricas agregadas (já existentes)
+//   /stats.json   -> Métricas agregadas (aceita ?color=verde|amarelo|vermelho)
 //   /download.csv -> CSV simples (fallback local)
 #include <stdio.h>
 #include <string.h>
@@ -82,6 +82,26 @@ static err_t http_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
     return ERR_OK;
 }
 
+/* ---------- helpers: parse color query ---------- */
+static bool parse_color_query(const char *req, stat_color_t *out_color, bool *has_color) {
+    // Procura na 1a linha por "?color=xxx"
+    *has_color = false;
+    if (!req) return false;
+
+    const char *q = strstr(req, "GET /stats.json?");
+    if (!q) return true; // OK, mas sem parâmetro
+
+    const char *p = strstr(q, "color=");
+    if (!p) return true;
+
+    p += 6;
+    if (!strncmp(p, "verde", 5))      { *out_color = STAT_COLOR_VERDE; *has_color = true; return true; }
+    if (!strncmp(p, "amarelo", 7))    { *out_color = STAT_COLOR_AMARELO; *has_color = true; return true; }
+    if (!strncmp(p, "vermelho", 8))   { *out_color = STAT_COLOR_VERMELHO; *has_color = true; return true; }
+
+    return true; // parâmetro desconhecido => ignora e usa geral
+}
+
 /* ---------- HTML: Painel Profissional (/) ---------- */
 static void make_html_pro(char *out, size_t outsz) {
     const char *body =
@@ -90,37 +110,54 @@ static void make_html_pro(char *out, size_t outsz) {
         "<title>TheraLink — Profissional</title>"
         "<style>"
         "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#f6f7fb;color:#111}"
-        "nav{display:flex;gap:12px;margin-bottom:12px}"
+        "nav{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}"
         "nav a{padding:8px 12px;border:1px solid #ddd;background:#fff;border-radius:10px;text-decoration:none;color:#111}"
         ".grid{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:760px){.grid{grid-template-columns:1fr 1fr}}"
         ".card{border:1px solid #e6e6e9;border-radius:14px;padding:14px;background:#fff;box-shadow:0 4px 20px rgba(0,0,0,.04)}"
         ".title{margin:0 0 8px;font-size:18px}.kpi{font-size:34px;font-weight:800;margin:6px 0}"
-        ".row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.chip{font:12px monospace;background:#f1f1f5;border-radius:999px;padding:4px 8px}"
+        ".row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}"
         "canvas{width:100%;height:220px;background:#fafafa;border:1px solid #eee;border-radius:10px}"
         "button{padding:8px 10px;border-radius:10px;border:1px solid #ddd;background:#fff}"
         ".mini .kpi{font-size:26px;margin:4px 0}"
+        /* chips */
+        ".chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}"
+        ".chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #e2e2e6;border-radius:999px;background:#fff;cursor:pointer;user-select:none}"
+        ".chip .dot{width:10px;height:10px;border-radius:999px;display:inline-block}"
+        ".chip[data-c='all'] .dot{background:linear-gradient(90deg,#12b886,#fab005,#fa5252)}"
+        ".chip[data-c='verde'] .dot{background:#12b886}"
+        ".chip[data-c='amarelo'] .dot{background:#fab005}"
+        ".chip[data-c='vermelho'] .dot{background:#fa5252}"
+        ".chip.active{box-shadow:0 0 0 2px rgba(17,17,17,.08);border-color:#c9c9cf}"
+        ".hint{font-size:12px;color:#666}"
         "</style></head><body>"
         "<nav>"
           "<a href='/'>Profissional</a>"
           "<a href='/display'>Display</a>"
           "<a href='/download.csv'>Baixar CSV</a>"
         "</nav>"
-        "<h1 style='font-size:20px;margin:6px 0 12px'>Painel — Profissional</h1>"
+        "<h1 style='font-size:20px;margin:6px 0 8px'>Painel — Profissional</h1>"
+        "<div class='chips' id='chips'>"
+          "<div class='chip active' data-c='all'><span class='dot'></span><span>Todos</span></div>"
+          "<div class='chip' data-c='verde'><span class='dot'></span><span>Grupo Verde</span></div>"
+          "<div class='chip' data-c='amarelo'><span class='dot'></span><span>Grupo Amarelo</span></div>"
+          "<div class='chip' data-c='vermelho'><span class='dot'></span><span>Grupo Vermelho</span></div>"
+        "</div>"
+        "<div class='hint'>Filtre para analisar apenas um grupo de pulseira.</div>"
         "<div class=grid>"
           "<div class=card>"
             "<div class=title>BPM (ao vivo / m&eacute;dia)</div>"
             "<div id=bigBpm class=kpi>--</div>"
             "<canvas id=line></canvas>"
             "<div class=row>"
-              "<span class=chip id=nchip>n=0</span>"
-              "<span class=chip id=ts>--</span>"
+              "<span id=nchip class='hint'>n=0</span>"
+              "<span id=ts class='hint'>--</span>"
               "<button onclick='hist=[];drawLine()'>Limpar</button>"
             "</div>"
           "</div>"
           "<div class=card>"
             "<div class=title>Resumo</div>"
             "<div class=row>"
-              "<div class=mini>"
+              "<div class=mini style='min-width:180px'>"
                 "<div style='font-size:12px;color:#666'>Ansiedade m&eacute;dia</div>"
                 "<div id=ans class=kpi>--</div>"
                 "<div style='font-size:12px;color:#666;margin-top:4px'>Energia m&eacute;dia</div>"
@@ -133,7 +170,7 @@ static void make_html_pro(char *out, size_t outsz) {
           "</div>"
         "</div>"
         "<script>"
-        "let hist=[];const maxPts=180;"
+        "let hist=[];const maxPts=180;let flt='all';"
         "const L=document.getElementById('line'),B=document.getElementById('bars');"
         "const lc=L.getContext('2d'),bc=B.getContext('2d');"
         "function drawLine(){const w=L.clientWidth,h=L.clientHeight;L.width=w;L.height=h;"
@@ -149,7 +186,9 @@ static void make_html_pro(char *out, size_t outsz) {
           "for(let i=0;i<3;i++){const val=data[i];const y=h-20;const bh=(val/M)*(h-50);"
             "bc.fillRect(x,y-bh,bw,bh);bc.fillText(lbl[i],x,y+12);bc.fillText(String(val),x+bw/2-6,y-bh-6);x+=bw+gap;}}"
         "function ts(){return new Date().toLocaleTimeString();}"
-        "async function tick(){try{const r=await fetch('/stats.json',{cache:'no-store'});const s=await r.json();"
+        "function sel(c){flt=c;document.querySelectorAll('.chip').forEach(el=>{el.classList.toggle('active',el.dataset.c===c);});hist=[];drawLine();tick();}"
+        "document.getElementById('chips').addEventListener('click',e=>{const el=e.target.closest('.chip');if(!el)return;sel(el.dataset.c)});"
+        "async function tick(){try{let url='/stats.json';if(flt!=='all'){url+='?color='+flt;}const r=await fetch(url,{cache:'no-store'});const s=await r.json();"
             "const live=(s.bpm_live&&s.bpm_live>=20&&s.bpm_live<=250)?s.bpm_live:0;"
             "const main=live||s.bpm_mean||0;"
             "document.getElementById('bigBpm').textContent=main?main.toFixed(1):'--';"
@@ -227,9 +266,15 @@ static void make_html_display(char *out, size_t outsz) {
         "Connection: close\r\n\r\n%s", body);
 }
 
-/* ---------- JSON: stats (/stats.json) ---------- */
-static void make_json_stats(char *out, size_t outsz) {
-    stats_snapshot_t s; stats_get_snapshot(&s);
+/* ---------- JSON: stats (/stats.json[?color=...]) ---------- */
+static void make_json_stats(char *out, size_t outsz, const char *req_line) {
+    stats_snapshot_t s;
+    stat_color_t col = STAT_COLOR_VERDE; bool has = false;
+    parse_color_query(req_line, &col, &has);
+
+    if (has) stats_get_snapshot_by_color(col, &s);
+    else     stats_get_snapshot(&s);
+
     float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
     float ans_mean = isnan(s.ans_mean) ? 0.f : s.ans_mean;
     float ene_mean = isnan(s.energy_mean) ? 0.f : s.energy_mean;
@@ -278,7 +323,6 @@ static void make_json_oled(char *out, size_t outsz) {
 
 /* ---------- CSV (fallback simples) ---------- */
 static size_t dump_csv_fallback(char *out, size_t maxlen) {
-    // Se você já está usando stats_dump_csv no seu projeto, pode remover este fallback e chamar stats_dump_csv direto.
     stats_snapshot_t s; stats_get_snapshot(&s);
     double bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.0 : s.bpm_mean_trimmed;
     double ans_mean = isnan(s.ans_mean)         ? 0.0 : s.ans_mean;
@@ -307,8 +351,6 @@ static void make_csv(char *out, size_t outsz) {
     if (hdr >= outsz) return;
     size_t max_csv = outsz - hdr;
     (void)dump_csv_fallback(out + hdr, max_csv);
-    // Alternativa (se preferir usar a função do stats.c):
-    // (void)stats_dump_csv(out + hdr, max_csv);
 }
 
 /* ---------- HTTP ---------- */
@@ -327,7 +369,7 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
     bool want_display = (strncmp(req, "GET /display",      12) == 0);
     bool want_csv     = (strncmp(req, "GET /download.csv", 18) == 0);
 
-    if      (want_stats)   make_json_stats(g_resp, sizeof g_resp);
+    if      (want_stats)   make_json_stats(g_resp, sizeof g_resp, req);
     else if (want_oled)    make_json_oled (g_resp, sizeof g_resp);
     else if (want_display) make_html_display(g_resp, sizeof g_resp);
     else if (want_csv)     make_csv(g_resp, sizeof g_resp);

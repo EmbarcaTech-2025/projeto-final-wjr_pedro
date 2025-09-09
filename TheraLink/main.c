@@ -1,4 +1,4 @@
-// main.c — Fluxo: pergunta A/B -> cor (opcional) -> oxímetro -> ansiedade -> energia -> humor
+// main.c — Fluxo: pergunta A/B -> cor (opcional) -> oxímetro -> energia -> humor -> ansiedade
 // Publica dados via AP (DHCP/DNS/HTTP) para acesso no celular/tablet da profissional.
 // A página /display apenas espelha as 4 linhas do OLED (ampliadas).
 
@@ -16,7 +16,7 @@
 
 #include "src/cor.h"         // cor_init, cor_read_rgb_norm, cor_classify, cor_class_to_str
 #include "src/oximetro.h"    // oxi_init, oxi_start, oxi_poll, oxi_get_state, ...
-#include "src/stats.h"       // stats_init, stats_add_bpm, stats_inc_color, stats_add_anxiety, stats_add_energy, stats_add_humor, stats_get_snapshot
+#include "src/stats.h"       // stats_init, stats_add_*, stats_set_current_color, stats_get_snapshot
 #include "src/web_ap.h"      // web_ap_start + web_display_set_lines (espelho do OLED)
 
 // ==== OLED em I2C1 (BitDog) ====
@@ -128,17 +128,15 @@ static joy_events_t joystick_poll(void) {
 // ---------- Estados ----------
 typedef enum {
     ST_ASK = 0,        // Pergunta inicial
-    ST_COLOR_PREP,     // Tela de instrução (5s): "Selecao de cor" / "Aproxime a pulseira no sensor"
-    ST_COLOR_LOOP,     // Guia (Verde/Amarelo/Vermelho) + leitura em tempo real + A=OK
+    ST_COLOR_INTRO,    // Tela de instrução (5s)
+    ST_COLOR_LOOP,     // Loop de leitura de cor (A captura)
     ST_OXI_PREP,       // Inicializa/ativa oxímetro
     ST_OXI_RUN,        // Oxímetro rodando
     ST_SHOW_BPM,       // Mostra BPM final por ~3s
+    ST_ENERGY_ASK,     // Pergunta energia 1..4 (joystick)
+    ST_HUMOR_ASK,      // Pergunta humor 1..4 (joystick)
     ST_ANS_ASK,        // Pergunta ansiedade 1..4 (joystick)
-    ST_ANS_SAVED,      // Confirma e avança para Energia
-    ST_ENE_ASK,        // Pergunta energia 1..4
-    ST_ENE_SAVED,      // Confirma e avança para Humor
-    ST_HUM_ASK,        // Pergunta humor 1..4
-    ST_HUM_SAVED,      // Confirma e volta ao menu
+    ST_ANS_SAVED,      // Confirma nível salvo por ~3s
     ST_REPORT          // Tela de relatório (botão do joystick para entrar/sair)
 } state_t;
 
@@ -171,10 +169,10 @@ int main(void) {
     state_t st = ST_ASK;
     state_t last_st = (state_t)-1;
     uint32_t t_last = 0;
-    uint32_t show_until_ms = 0; // para telas temporárias (3~5s)
-    int ans_level = 2;          // auto-relatos 1..4
-    int ene_level = 2;
-    int hum_level = 2;
+    uint32_t show_until_ms = 0; // para telas temporárias
+    int energy_level = 2;       // 1..4
+    int humor_level  = 2;       // 1..4
+    int ans_level    = 2;       // 1..4
 
     while (true) {
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
@@ -195,54 +193,37 @@ int main(void) {
                 case ST_ASK:
                     oled_lines("Fazer leitura de cor?", "(A) Sim   (B) Nao", "Botao Joy: Relatorio", "");
                     break;
-
-                case ST_COLOR_PREP:
+                case ST_COLOR_INTRO:
                     oled_lines("Selecao de cor", "Aproxime a pulseira", "no sensor", "");
-                    show_until_ms = now_ms + 5000; // 5s de instrucao
                     break;
-
                 case ST_COLOR_LOOP:
-                    // conteúdo atualizado no loop a cada ~200ms
+                    // desenhado dinamicamente abaixo
                     break;
-
                 case ST_OXI_PREP:
                     oled_lines("Oximetro ativando...", "Posicione o dedo", "", "");
                     break;
-
                 case ST_OXI_RUN:
-                    // linhas atualizadas no loop
                     break;
-
                 case ST_SHOW_BPM:
-                    // atualizado ao entrar
                     break;
-
-                case ST_ANS_ASK: {
-                    char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ans_level);
-                    oled_lines("Ansiedade", l2, "Joy<- ->   A=OK", "");
-                    break;
-                }
-
-                case ST_ENE_ASK: {
-                    char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ene_level);
+                case ST_ENERGY_ASK: {
+                    char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", energy_level);
                     oled_lines("Energia", l2, "Joy<- ->   A=OK", "");
                     break;
                 }
-
-                case ST_HUM_ASK: {
-                    char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", hum_level);
+                case ST_HUMOR_ASK: {
+                    char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", humor_level);
                     oled_lines("Humor", l2, "Joy<- ->   A=OK", "");
                     break;
                 }
-
-                case ST_ANS_SAVED:
-                case ST_ENE_SAVED:
-                case ST_HUM_SAVED:
-                    // telas curtas (definidas no momento do OK)
+                case ST_ANS_ASK: {
+                    char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ans_level);
+                    oled_lines("Ansiedade", l2, "Joy<- ->   A=OK", "");
                     break;
-
+                }
+                case ST_ANS_SAVED:
+                    break;
                 case ST_REPORT:
-                    // atualizado no loop a cada ~1s
                     break;
             }
             last_st = st;
@@ -259,12 +240,15 @@ int main(void) {
                 if (!cor_ready) {
                     oled_lines("TCS34725 nao encontrado", "Pulando etapa de cor", "", "");
                     sleep_ms(900);
+                    stats_set_current_color((stat_color_t)STAT_COLOR_NONE); // sem cor
                     st = ST_OXI_PREP;
                 } else {
-                    st = ST_COLOR_PREP; // tela de instrucao 5s
+                    show_until_ms = now_ms + 5000; // 5s de instrução
+                    st = ST_COLOR_INTRO;
                 }
             } else if (b_edge) {
                 // Pula direto para oxímetro
+                stats_set_current_color((stat_color_t)STAT_COLOR_NONE); // sem cor
                 st = ST_OXI_PREP;
             } else if (joy_btn_edge) {
                 st = ST_REPORT;
@@ -272,9 +256,9 @@ int main(void) {
             }
             break;
 
-        case ST_COLOR_PREP:
+        case ST_COLOR_INTRO:
             if ((int32_t)(show_until_ms - now_ms) <= 0) {
-                st = ST_COLOR_LOOP; // vai para guia+leitura
+                st = ST_COLOR_LOOP;
                 t_last = now_ms;
             }
             break;
@@ -285,27 +269,25 @@ int main(void) {
                 t_last = now_ms;
 
                 float rf, gf, bf, cf;
+                const char *nome = "Sem leitura";
                 if (cor_read_rgb_norm(&rf, &gf, &bf, &cf)) {
                     cor_class_t cls = cor_classify(rf, gf, bf, cf);
-                    const char *nome = cor_class_to_str(cls);
-
-                    char l4[24];
-                    snprintf(l4, sizeof l4, "Lendo: %s  A=OK", nome);
-                    // Guia simples sem muitos textos
-                    oled_lines("Verde = Bem", "Amarelo = Atencao", "Vermelho = Apoio", l4);
-                } else {
-                    oled_lines("Verde = Bem", "Amarelo = Atencao", "Vermelho = Apoio", "Aproxime a pulseira");
+                    nome = cor_class_to_str(cls);
                 }
+
+                // Tela simples e direta: descrição + cor atual
+                char l4[24];
+                snprintf(l4, sizeof l4, "Cor: %s  A=OK", nome);
+                oled_lines("Verde - Bem",  "Amarelo - Neutro", "Vermelho - Mal", l4);
             }
 
             if (a_edge) {
-                // Confirma a cor atual e avança
+                // Captura a cor atual e avança
                 float rf, gf, bf, cf;
                 if (cor_read_rgb_norm(&rf, &gf, &bf, &cf)) {
                     cor_class_t cls = cor_classify(rf, gf, bf, cf);
-                    g_cor_counts[cls]++;
 
-                    // Apenas VERDE/AMARELO/VERMELHO contam
+                    // Mapeia somente se for uma das 3 cores de interesse
                     stat_color_t sc = (stat_color_t)0;
                     bool ok = true;
                     switch (cls) {
@@ -314,17 +296,23 @@ int main(void) {
                         case COR_VERMELHO: sc = STAT_COLOR_VERMELHO; break;
                         default: ok = false; break; // ignora outras
                     }
-                    if (ok) stats_inc_color(sc);
+                    if (ok) {
+                        g_cor_counts[cls]++;
+                        stats_inc_color(sc);
+                        stats_set_current_color(sc); // define grupo corrente p/ filtro web
+                    } else {
+                        stats_set_current_color((stat_color_t)STAT_COLOR_NONE);
+                    }
 
                     const char *nome = cor_class_to_str(cls);
                     char msg[26];
                     snprintf(msg, sizeof msg, "Cor %s captada!", nome);
                     oled_lines(msg, "", "", "");
-                    show_until_ms = now_ms + 1000;  // ~1s
+                    show_until_ms = now_ms + 1200;  // ~1.2s (feedback rápido)
                     st = ST_OXI_PREP;               // segue para oxímetro
                 } else {
-                    oled_lines("Sem leitura", "Aproxime de novo", "", "");
-                    sleep_ms(700);
+                    oled_lines("Falha na leitura", "Tente novamente", "", "");
+                    sleep_ms(800);
                 }
             }
             break;
@@ -381,7 +369,7 @@ int main(void) {
 
                     char l2[22]; snprintf(l2, sizeof l2, "BPM FINAL: %.1f", final_bpm);
                     oled_lines("Concluido!", l2, "", "");
-                    show_until_ms = now_ms + 3000; // ~3s
+                    show_until_ms = now_ms + 1500; // ~1.5s
                     st = ST_SHOW_BPM;
                 } else if (s == OXI_ERROR) {
                     oled_lines("ERRO no oximetro", "Cheque conexoes", "", "");
@@ -394,88 +382,74 @@ int main(void) {
 
         case ST_SHOW_BPM:
             if ((int32_t)(show_until_ms - now_ms) <= 0) {
+                // inicia questionário em sequência: Energia -> Humor -> Ansiedade
+                energy_level = 2;
+                char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", energy_level);
+                oled_lines("Energia", l2, "Joy<- ->   A=OK", "");
+                st = ST_ENERGY_ASK;
+            }
+            break;
+
+        case ST_ENERGY_ASK: {
+            bool changed = false;
+            if (jev.left_edge && energy_level > 1)  { energy_level--; changed = true; }
+            if (jev.right_edge && energy_level < 4) { energy_level++; changed = true; }
+            if (changed) {
+                char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", energy_level);
+                oled_lines("Energia", l2, "Joy<- ->   A=OK", "");
+            }
+            if (a_edge) {
+                stats_add_energy((uint8_t)energy_level);
+                humor_level = 2;
+                char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", humor_level);
+                oled_lines("Humor", l2, "Joy<- ->   A=OK", "");
+                st = ST_HUMOR_ASK;
+            }
+            break;
+        }
+
+        case ST_HUMOR_ASK: {
+            bool changed = false;
+            if (jev.left_edge && humor_level > 1)  { humor_level--; changed = true; }
+            if (jev.right_edge && humor_level < 4) { humor_level++; changed = true; }
+            if (changed) {
+                char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", humor_level);
+                oled_lines("Humor", l2, "Joy<- ->   A=OK", "");
+            }
+            if (a_edge) {
+                stats_add_humor((uint8_t)humor_level);
                 ans_level = 2;
                 char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ans_level);
                 oled_lines("Ansiedade", l2, "Joy<- ->   A=OK", "");
                 st = ST_ANS_ASK;
             }
             break;
+        }
 
-        // === Ansiedade ===
         case ST_ANS_ASK: {
+            // joystick muda valor 1..4, A confirma
             bool changed = false;
             if (jev.left_edge && ans_level > 1)  { ans_level--; changed = true; }
             if (jev.right_edge && ans_level < 4) { ans_level++; changed = true; }
             if (changed) {
-                char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ans_level);
+                char l2[22]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ans_level);
                 oled_lines("Ansiedade", l2, "Joy<- ->   A=OK", "");
             }
             if (a_edge) {
                 stats_add_anxiety((uint8_t)ans_level);
-                char msg[24]; snprintf(msg, sizeof msg, "Ans=%d registrado", ans_level);
+                char msg[24]; snprintf(msg, sizeof msg, "Nivel %d registrado", ans_level);
                 oled_lines(msg, "", "", "");
-                show_until_ms = now_ms + 900;
-                ene_level = 2;
+                show_until_ms = now_ms + 1200; // 1.2s
                 st = ST_ANS_SAVED;
             }
             break;
         }
+
         case ST_ANS_SAVED:
             if ((int32_t)(show_until_ms - now_ms) <= 0) {
-                char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ene_level);
-                oled_lines("Energia", l2, "Joy<- ->   A=OK", "");
-                st = ST_ENE_ASK;
-            }
-            break;
-
-        // === Energia ===
-        case ST_ENE_ASK: {
-            bool changed = false;
-            if (jev.left_edge && ene_level > 1)  { ene_level--; changed = true; }
-            if (jev.right_edge && ene_level < 4) { ene_level++; changed = true; }
-            if (changed) {
-                char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", ene_level);
-                oled_lines("Energia", l2, "Joy<- ->   A=OK", "");
-            }
-            if (a_edge) {
-                stats_add_energy((uint8_t)ene_level);
-                char msg[24]; snprintf(msg, sizeof msg, "Energia=%d ok", ene_level);
-                oled_lines(msg, "", "", "");
-                show_until_ms = now_ms + 900;
-                hum_level = 2;
-                st = ST_ENE_SAVED;
-            }
-            break;
-        }
-        case ST_ENE_SAVED:
-            if ((int32_t)(show_until_ms - now_ms) <= 0) {
-                char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", hum_level);
-                oled_lines("Humor", l2, "Joy<- ->   A=OK", "");
-                st = ST_HUM_ASK;
-            }
-            break;
-
-        // === Humor ===
-        case ST_HUM_ASK: {
-            bool changed = false;
-            if (jev.left_edge && hum_level > 1)  { hum_level--; changed = true; }
-            if (jev.right_edge && hum_level < 4) { hum_level++; changed = true; }
-            if (changed) {
-                char l2[24]; snprintf(l2, sizeof l2, "Nivel: %d (1..4)", hum_level);
-                oled_lines("Humor", l2, "Joy<- ->   A=OK", "");
-            }
-            if (a_edge) {
-                stats_add_humor((uint8_t)hum_level);
-                char msg[24]; snprintf(msg, sizeof msg, "Humor=%d ok", hum_level);
-                oled_lines(msg, "", "", "");
-                show_until_ms = now_ms + 900;
-                st = ST_HUM_SAVED;
-            }
-            break;
-        }
-        case ST_HUM_SAVED:
-            if ((int32_t)(show_until_ms - now_ms) <= 0) {
-                st = ST_ASK;   // volta ao menu
+                // Limpa a “cor corrente” para o próximo participante
+                stats_set_current_color((stat_color_t)STAT_COLOR_NONE);
+                st = ST_ASK;
             }
             break;
 
@@ -485,11 +459,9 @@ int main(void) {
                 t_last = now_ms;
                 stats_snapshot_t snap; stats_get_snapshot(&snap);
 
-                char l1[22], l2[22], l3[22], l4[22];
+                char l1[22], l2[22], l3[22];
                 float bpm = snap.bpm_mean_trimmed;
                 float ans = snap.ans_mean;
-                float ene = snap.energy_mean;
-                float hum = snap.humor_mean;
 
                 if (isnan(bpm)) snprintf(l1, sizeof l1, "BPM: --");
                 else            snprintf(l1, sizeof l1, "BPM: %.1f (n=%lu)",
@@ -500,20 +472,12 @@ int main(void) {
                         (unsigned long)snap.cor_amarelo,
                         (unsigned long)snap.cor_vermelho);
 
-                if (isnan(ans)) snprintf(l3, sizeof l3, "Ans: -- (n=%lu)", (unsigned long)snap.ans_count);
+                if (isnan(ans)) snprintf(l3, sizeof l3, "Ans: --  Joy=sair");
                 else            snprintf(l3, sizeof l3, "Ans: %.2f (n=%lu)",
                                          ans, (unsigned long)snap.ans_count);
 
-                if (isnan(ene) && isnan(hum)) snprintf(l4, sizeof l4, "Joy=sair");
-                else if (isnan(hum))          snprintf(l4, sizeof l4, "En: %.2f (n=%lu)",
-                                                       ene, (unsigned long)snap.energy_count);
-                else if (isnan(ene))          snprintf(l4, sizeof l4, "Hu: %.2f (n=%lu)",
-                                                       hum, (unsigned long)snap.humor_count);
-                else                          snprintf(l4, sizeof l4, "En: %.2f  Hu: %.2f", ene, hum);
-
+                // desenha exatamente 4 linhas (sem draw extra)
                 oled_lines("Relatorio Grupo", l1, l2, l3);
-                // para mostrar 4a linha, re-desenhe (ou substitua l3 por l4 acima)
-                oled_lines("Relatorio Grupo", l1, l2, l4);
             }
             if (joy_btn_edge) {
                 st = ST_ASK;

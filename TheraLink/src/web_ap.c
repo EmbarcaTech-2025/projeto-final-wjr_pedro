@@ -341,17 +341,28 @@ static size_t dump_csv_fallback(char *out, size_t maxlen) {
         (unsigned long)s.cor_vermelho
     );
 }
+/* ---------- CSV (download.csv) ---------- */
+/* ---------- CSV (download.csv) ---------- */
 static void make_csv(char *out, size_t outsz) {
-    size_t hdr = snprintf(out, outsz,
+    // 1) Cabeçalhos HTTP
+    size_t hdr_len = snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/csv; charset=UTF-8\r\n"
         "Content-Disposition: attachment; filename=\"theralink_dados.csv\"\r\n"
         "Cache-Control: no-store\r\n"
         "Connection: close\r\n\r\n");
-    if (hdr >= outsz) return;
-    size_t max_csv = outsz - hdr;
-    (void)dump_csv_fallback(out + hdr, max_csv);
+    if (hdr_len >= outsz) return; // sem espaço
+
+    // 2) Corpo CSV (agregado atual)
+    size_t body_max = outsz - hdr_len;
+    size_t csv_len  = stats_dump_csv(out + hdr_len, body_max);
+
+    // 3) Fecha a string e deixa strlen enxergar tudo
+    size_t total = hdr_len + csv_len;
+    if (total >= outsz) total = outsz - 1;
+    out[total] = '\0';
 }
+
 
 /* ---------- HTTP ---------- */
 static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
@@ -367,7 +378,7 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
     bool want_stats   = (strncmp(req, "GET /stats.json",   15) == 0);
     bool want_oled    = (strncmp(req, "GET /oled.json",    14) == 0);
     bool want_display = (strncmp(req, "GET /display",      12) == 0);
-    bool want_csv     = (strncmp(req, "GET /download.csv", 18) == 0);
+    bool want_csv = (memcmp(req, "GET /download.csv", 17) == 0);
 
     if      (want_stats)   make_json_stats(g_resp, sizeof g_resp, req);
     else if (want_oled)    make_json_oled (g_resp, sizeof g_resp);

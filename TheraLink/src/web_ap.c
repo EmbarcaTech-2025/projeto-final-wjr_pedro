@@ -235,6 +235,11 @@ static void make_html_display(char *out, size_t outsz) {
         "#l4{font-size:clamp(22px,7.2vh,44px)}"
         ".fade{animation:fade .22s ease}"
         "@keyframes fade{from{opacity:.45;transform:translateY(1px)}to{opacity:1;transform:none}}"
+        /* Coloração das palavras de cor */
+        ".tag{font-weight:900}"
+        ".tag.green{color:#12b886}"
+        ".tag.yellow{color:#fab005}"
+        ".tag.red{color:#fa5252}"
         "</style></head><body>"
         "<div class=panel>"
           "<div class=hdr>"
@@ -251,11 +256,24 @@ static void make_html_display(char *out, size_t outsz) {
         "<script>"
         "function fs(){const d=document.documentElement; if(d.requestFullscreen) d.requestFullscreen();}"
         "let last=['','','',''];"
-        "async function tick(){try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();"
-          "const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
-          "for(let i=0;i<4;i++){if(arr[i]!==last[i]){last[i]=arr[i];const id='l'+(i+1),el=document.getElementById(id);"
-            "el.classList.remove('fade'); el.textContent=arr[i]||'\\u00A0'; void el.offsetWidth; el.classList.add('fade');}}"
-        "}catch(e){}}"
+        "function esc(t){return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}"
+        "function colorize(t){"
+          "let x=esc(t||'');"
+          // feminino/masculino e maiúsc./minúsc. (Verde/VERDE, Amarela/AMARELA/Amarelo/AMARELO, Vermelha/VERMELHA/Vermelho/VERMELHO)
+          "x=x.replace(/\\b(VERDE|Verde)\\b/g,'<span class=\"tag green\">$1</span>');"
+          "x=x.replace(/\\b(AMARELA|Amarela|AMARELO|Amarelo)\\b/g,'<span class=\"tag yellow\">$1</span>');"
+          "x=x.replace(/\\b(VERMELHA|Vermelha|VERMELHO|Vermelho)\\b/g,'<span class=\"tag red\">$1</span>');"
+          "return x;"
+        "}"
+        "async function tick(){"
+          "try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();"
+              "const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
+              "for(let i=0;i<4;i++){if(arr[i]!==last[i]){last[i]=arr[i];const id='l'+(i+1),el=document.getElementById(id);"
+                "el.classList.remove('fade');"
+                "el.innerHTML=colorize(arr[i])||'&nbsp;';"
+                "void el.offsetWidth; el.classList.add('fade');}}"
+          "}catch(e){}"
+        "}"
         "setInterval(tick,500); tick();"
         "</script></body></html>";
 
@@ -265,6 +283,7 @@ static void make_html_display(char *out, size_t outsz) {
         "Cache-Control: no-store\r\n"
         "Connection: close\r\n\r\n%s", body);
 }
+
 
 /* ---------- JSON: stats (/stats.json[?color=...]) ---------- */
 static void make_json_stats(char *out, size_t outsz, const char *req_line) {
@@ -341,7 +360,6 @@ static size_t dump_csv_fallback(char *out, size_t maxlen) {
         (unsigned long)s.cor_vermelho
     );
 }
-/* ---------- CSV (download.csv) ---------- */
 /* ---------- CSV (download.csv) ---------- */
 static void make_csv(char *out, size_t outsz) {
     // 1) Cabeçalhos HTTP

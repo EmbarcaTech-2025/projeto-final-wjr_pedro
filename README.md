@@ -27,12 +27,10 @@ Em escolas e projetos sociais, muitas vezes **não há internet estável**. Psic
 ---
 
 ## Imagem da BitDogLab rodando o sistema
-
-![alt text](etapa3\fotos\image.png)
+![BitDogLab rodando](./etapa3/fotos/image.png "BitDogLab rodando")
 
 ## Imagem do Painel Web
-
-![alt text](etapa3\telas\painel.png)
+![Painel Web](./etapa3/telas/painel.png "Painel Web")
 
 ## 3) Requisitos Funcionais (RF)
 - **RF01.** Acesso via **portal web local** (HTML/JS + JSON) hospedado pelo próprio dispositivo (**sem internet**).  

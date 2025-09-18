@@ -2,55 +2,127 @@
 **Alunos:** Wagner Junior e Pedro Henrique  
 **Local:** EmbarcaTech — Brasília
 
+> **Resumo:** Sistema **offline**, de **baixo custo**, que roda em uma **BitDogLab (RP2040 / Pico W)**, cria um **AP Wi-Fi** e expõe um **painel web** para a profissional acompanhar, em tempo real, **BPM** (oxímetro), **autoavaliação simples** (energia, humor, ansiedade) e **contagem por cores** (validação por sensor TCS34725). O fluxo no dispositivo usa **OLED + joystick** e dá **feedback imediato** (telas e LEDs).
+
 ---
 
 ## 1) Problema a ser resolvido
-Em escolas e projetos sociais muitas vezes **não há internet estável**. Mesmo assim, psicólogos e educadores precisam iniciar atividades em **grupos grandes** (ex.: ~20 pessoas) com uma noção rápida do **estado do grupo**. Sem ferramentas simples e offline, o atendimento começa “no escuro”, com **alto atrito operacional** e risco de **decisões pouco informadas**.
+Em escolas e projetos sociais, muitas vezes **não há internet estável**. Psicólogos e educadores ainda assim precisam iniciar atividades com **turmas de ~20 pessoas**, obtendo rapidamente uma visão do **estado do grupo**. Sem uma ferramenta simples e **100% offline**, o atendimento começa “no escuro”, com **atrito operacional** e risco de decisões **pouco informadas**.
 
-**TheraLink** oferece uma solução **de baixo custo, offline e de instalação imediata** para coletar um **check‑in** objetivo (BPM) e subjetivo (autoavaliação simples), fornecendo ao profissional uma **visão geral** para orientar a sessão.
+**TheraLink** oferece uma solução de instalação imediata e **sem internet** para coletar um **check-in** objetivo (**BPM**) e subjetivo (**autoavaliação** em três escalas), fornecendo ao profissional uma **visão consolidada** para orientar a sessão.
+
+---
+
+## 2) Como funciona na prática (simulação do uso)
+1. **Liga o dispositivo**. Ele cria um **AP Wi-Fi** aberto chamado **`TheraLink`** (endereço local **`192.168.4.1`**).  
+2. O participante posiciona o dedo no **oxímetro (MAX30102)**. O sistema mede **BPM** (e usa o valor final no registro).  
+3. No **OLED** ou **Display Externo**, com o **joystick**, o participante informa **Energia**, **Humor** e **Ansiedade** (escala 1..3).  
+4. O algoritmo `triage_decide(...)` calcula um **nível de risco** e **recomenda uma pulseira** (**verde/amarelo/vermelho**).  
+5. Em seguida, o sensor **TCS34725** valida a **cor** da pulseira (lido no punho) por **razões R/G** estáveis.  
+6. O sistema **salva o registro** em memória (RAM) e atualiza **médias/contagens**. As telas do **OLED** e a rota web **`/display`** mostram as mensagens em tempo real.  
+7. A profissional se conecta ao AP **TheraLink** pelo celular/notebook e acessa **`http://192.168.4.1/`** para ver o **Painel** (gráfico de BPM, KPIs e contagem por cores). Também há **`/stats.json`** e **`/download.csv`**.
+
+> **Observação:** os dados ficam **locais** (RAM). O **CSV** é um **agregado** para exportação rápida. Não há armazenamento em nuvem.
 
 ---
 
-## 2) Simulação do funcionamento na prática
-- O dispositivo liga e cria um **ponto de acesso Wi‑Fi (AP)**.
-- O aluno coloca o dedo no **oxímetro MAX3010x**: o sistema mede **frequência cardíaca** e **SpO₂**.
-- Em seguida, no **OLED** com **joystick**, o aluno informa seu **nível de ansiedade** (escala numérica simples).  
-  *(Opcional)*: o **TCS34725** registra uma **cor** (vermelho/amarelo/verde) para expressão lúdica e inclusiva, útil com crianças.
-- Os dados passam por **validação** e são consolidados **em RAM** (contagens, médias, últimas leituras).
-- O profissional conecta o **celular/notebook** ao AP do dispositivo e acessa a **página local** (**HTML**) ou o **endpoint `/stats.json`** (**JSON**) para acompanhar **em tempo real** a média de BPM, contagens de cores e últimos registros.
-- O participante recebe **feedback imediato** via **OLED/LED/buzzer**.
+## Imagem da BitDogLab rodando o sistema
 
----
+![alt text](etapa3\fotos\image.png)
+
+## Imagem do Painel Web
+
+![alt text](etapa3\telas\painel.png)
 
 ## 3) Requisitos Funcionais (RF)
-- **RF01.** Acesso via **portal web local** (HTML + JSON) hospedado pelo próprio dispositivo (sem internet).
-- **RF02.** Medição de **HR** e **SpO₂** com **MAX3010x**.
-- **RF03.** Registro do **nível de ansiedade** informado via **joystick** no **OLED**.
-- **RF04.** Leitura **opcional** de **cor** com **TCS34725** para expressão emocional lúdica.
-- **RF05.** **Consolidação de estatísticas em RAM**: contagens, médias e últimas leituras.
-- **RF06.** **Feedback imediato** ao usuário via **OLED**, **LEDs** e **buzzer**.
-- **RF07.** Disponibilização dos dados ao profissional em **tempo real** via **servidor HTTP local** (**`/stats.json`**).
+- **RF01.** Acesso via **portal web local** (HTML/JS + JSON) hospedado pelo próprio dispositivo (**sem internet**).  
+- **RF02.** Medição de **BPM** com **MAX30102** (suporte a MAX30100/30102).  
+- **RF03.** **Autoavaliação** no **OLED** (joystick): **Energia**, **Humor**, **Ansiedade** (1..3).  
+- **RF04.** **Recomendação de pulseira** via `triage_decide(...)` com faixas de BPM + escalas.  
+- **RF05.** **Validação de cor** no braço com **TCS34725** (verde, amarelo, vermelho; tolerâncias por **razões R/G**).  
+- **RF06.** **Consolidação em RAM**: média robusta de BPM, contagem por cor e médias de escalas.  
+- **RF07.** **Feedback imediato**: telas no **OLED** (espelhadas em **`/display`**) e efeitos/LEDs.  
+- **RF08.** **Painel do profissional** em **`/`** e **APIs**: **`/oled.json`**, **`/stats.json`** (com filtro `?color=`) e **`/download.csv`**.
 
 ---
 
 ## 4) Requisitos Não Funcionais (RNF)
-- **RNF01.** Funcionalidade **100% offline** (sem necessidade de internet).
-- **RNF02.** Operação em **power‑bank** por pelo menos **4 horas**.
-- **RNF03.** **Interação rápida**: até **30 segundos por pessoa**.
-- **RNF04.** Interface **inclusiva** com feedback **sonoro** e **visual**.
-- **RNF05.** Dados processados de forma **anônima** no dispositivo.
-- **RNF06.** **Custo acessível** e **montagem simples** (≤ 1 hora).
+- **RNF01.** Operação **100% offline**.  
+- **RNF02.** Preparado para **ambientes sem Wi-Fi externo** (AP próprio).  
+- **RNF03.** **Interação rápida**: ~**30 s por pessoa** (meta).  
+- **RNF04.** Interface **inclusiva** com feedback **visual** (OLED/cores/LEDs).  
+- **RNF05.** **Privacidade**: processamento local (sem Nuvem; exportação agregada em CSV).  
+- **RNF06.** **Baixo custo** e montagem simples.
 
 ---
 
-## 5) Lista inicial de materiais
-- **1× BitDogLab** (Raspberry Pi **Pico W** com OLED, matriz 5×5, joystick, buzzer, Wi‑Fi)
-- **1× Sensor MAX3010x** (HR/SpO₂)
-- **1× Sensor TCS34725** (cor RGB — *opcional*)
-- **Fios Dupont**, **fita dupla‑face**, **power‑bank**
-- *(Opcional)* Impressão de **tokens coloridos** e **etiqueta de instruções**
+## 5) Hardware & Ligações (BitDogLab)
+Periféricos utilizados:
+
+- **OLED (SSD1306) — I²C1**  
+  `SDA = GP14`, `SCL = GP15`, **ADDR = 0x3C`
+- **Sensor de Cor (TCS34725) — I²C0**  
+  `SDA = GP0`, `SCL = GP1`
+- **Oxímetro (MAX3010x) — I²C0**  
+  `SDA = GP0`, `SCL = GP1`
+- **Botões**: `BUTTON_A = GP5`, `BUTTON_B = GP6`  
+- **Joystick**: `X = ADC1/GP27`, `Y = ADC0/GP26`, **Botão = GP22`
+
+> **SSID do AP:** `TheraLink` (aberto, sem senha, conforme `web_ap.c`).  
+> **Gateway/host:** `192.168.4.1`.
+
+## 6) Materiais (versão atual)
+- **1× BitDogLab** (RP2040 Pico W com **OLED**, **matriz 5×5**, **joystick**, **Wi-Fi**)
+- **1× Extensor I²C** (para levar o barramento I²C0 até os conectores J3/J4)
+- **1× Oxímetro MAX30102** (I²C)
+- **1× Sensor de cor TCS34725** (I²C)
+- **Jumpers Dupont**, **fita dupla-face**, **power-bank** (ou fonte USB 5 V)
 
 ---
 
+## 7) Ligações (hardware)
+### 2.1. Barramento I²C da BitDogLab
+- O **OLED** da BitDogLab usa **I²C1** (interno da placa).
+- Os **sensores externos** (oxímetro + cor) usam **I²C0**.
 
+### 2.2. Conexões com o extensor I²C (I²C0)
+1. Conecte o **extensor I²C** à **entrada I²C0** da BitDogLab.  
+   - **SDA (I²C0) → GP0**  
+   - **SCL (I²C0) → GP1**  
+   - VCC 3V3 e GND conforme o extensor.
 
+2. No extensor, use os conectores:
+   - **J3 → Oxímetro (MAX30102)**  
+     - **SDA** (I²C)  
+     - **SCL** (I²C)  
+     - **3V3**  
+     - **GND**
+   - **J4 → Sensor de cor (TCS34725)**  
+     - **SDA** (I²C)  
+     - **SCL** (I²C)  
+     - **3V3**  
+     - **GND**
+
+> O firmware já espera **I²C0 em GP0/GP1** para esses sensores.
+
+---
+
+## 8) Passo a passo de montagem (rápido)
+1. **Fixe** o extensor I²C na BitDogLab e leve SDA/SCL/3V3/GND até ele.  
+2. **Conecte o MAX30102 no J3** do extensor (atenção a VCC e GND).  
+3. **Conecte o TCS34725 no J4** do extensor (atenção a VCC e GND).  
+4. **Conferir**: nada invertido; cabos firmes; sem curto.  
+5. Alimente a BitDogLab com **USB** (PC) ou **power-bank**.
+
+---
+
+## 9) Instalação & Build (compilação do firmware)
+
+1. Configure o **Pico SDK** (com **cyw43** e **lwIP** habilitados para o Pico W).  
+2. No diretório do projeto, gere a build (ex.: **CMake + Ninja**):
+   ```bash
+   mkdir build && cd build
+   cmake .. -DPICO_BOARD=pico_w
+   ninja
+3. Foi utilizado VSCode no desenvolvimento do projeto, recomendado caso use Windows.
+4. Nesse vídeo, tem um tutorial de como rodar projetos com a BitDogLab no VSCode: https://www.youtube.com/watch?v=uVK-OHy2XZg

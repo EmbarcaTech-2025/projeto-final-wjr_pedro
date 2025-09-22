@@ -2,14 +2,38 @@
 **Alunos:** Wagner Junior e Pedro Henrique  
 **Local:** EmbarcaTech — Brasília
 
-> **Resumo:** Sistema **offline**, de **baixo custo**, que roda em uma **BitDogLab (RP2040 / Pico W)**, cria um **AP Wi-Fi** e expõe um **painel web** para a profissional acompanhar, em tempo real, **BPM** (oxímetro), **autoavaliação simples** (energia, humor, ansiedade) e **contagem por cores** (validação por sensor TCS34725). O fluxo no dispositivo usa **OLED + joystick** e dá **feedback imediato** (telas e LEDs).
+### O que é o projeto
+
+O **TheraLink** é um sistema que você liga e começa a usar **sem internet**. Ela cria uma **rede Wi-Fi própria**; você conecta o **celular** ou **notebook** nessa rede e abre um **painel** que mostra, em tempo real, como o grupo está chegando para a atividade.  
+Cada participante faz um **check-in rápido**: coloca o dedo no **sensor de batimentos** para medir **BPM** e responde, na telinha com joystick, três perguntas simples sobre **energia**, **humor** e **ansiedade**. Com isso, o sistema sugere uma **cor de prioridade** (**verde**, **amarelo** ou **vermelho**) e **confirma** a cor com um **sensor de leitura de cores**.  
+Tudo acontece **localmente**, dentro do aparelho: nada vai para a nuvem, os dados ficam **anônimos** e você ainda pode **baixar um resumo** em CSV no final para registrar como estava o clima do grupo.
+
+> **Explicação técnica:** a placa é uma **BitDogLab (Pico W)**. Ela sobe um **ponto de acesso Wi-Fi**, roda **DHCP/DNS/HTTP**, lê o **MAX30102** (sensor batimentos) e o **TCS34725** (sensor cor), mostra mensagens no **OLED** e recebe respostas pelo **joystick**. A **prioridade** é calculada combinando BPM + respostas; as **estatísticas** ficam em memória e aparecem no painel web local.
 
 ---
 
-## 1) Problema a ser resolvido
-Em escolas e projetos sociais, muitas vezes **não há internet estável**. Psicólogos e educadores ainda assim precisam iniciar atividades com **turmas de ~20 pessoas**, obtendo rapidamente uma visão do **estado do grupo**. Sem uma ferramenta simples e **100% offline**, o atendimento começa “no escuro”, com **atrito operacional** e risco de decisões **pouco informadas**.
+## 1) Problema e motivação
 
-**TheraLink** oferece uma solução de instalação imediata e **sem internet** para coletar um **check-in** objetivo (**BPM**) e subjetivo (**autoavaliação** em três escalas), fornecendo ao profissional uma **visão consolidada** para orientar a sessão.
+### Por que isso existe?
+Em atividades com **turmas grandes** (escolas, projetos sociais, acolhimento) que passaram por um evento traumático recente, quem conduz a sessão precisa de um **sinal rápido** de como o grupo está. Sem essa leitura inicial, a condução começa **no escuro**: a dinâmica pode ser calma demais para um grupo elétrico ou intensa demais para um grupo ansioso — o que **piora a experiência** de todo mundo.
+
+Além disso, **conexão instável** é realidade em muitos lugares. Relatórios **UNICEF/ITU** indicam que **cerca de dois terços** das crianças e jovens **não têm internet em casa** [1]; mesmo em escolas, o Wi-Fi pode não dar conta. Ou seja, **soluções offline** e **fáceis de operar** fazem diferença de verdade na ponta.
+
+### O que o TheraLink entrega de útil
+O TheraLink foi feito para **reduzir atrito** e **dar contexto** em **~60 segundos** por pessoa:
+
+- **Um dado objetivo:** **BPM** pelo oxímetro — não serve para diagnóstico médico, mas ajuda a indicar **tensão** ou **agitação** (baseado em achados de HRV/arousal) [4][5].  
+- **Três sinais subjetivos:** **energia**, **humor** e **ansiedade**, em escala simples (1–3), fáceis de responder no **OLED + joystick** (inspirado em materiais de educação socioemocional) [2][3].  
+- **Uma síntese visual:** **verde / amarelo / vermelho** como **prioridade**, inspirada em esquemas de **triagem** amplamente entendidos pela população [6][7]. A cor é **validada** por um **sensor de cor**, o que torna a experiência **lúdica** e **inclusiva** (especialmente com crianças).  
+- **Visão do grupo em tempo real:** no **painel web local**, o profissional vê **médias**, **contagens por cor** e **gráfico** de BPM, sem depender de internet.
+
+### De onde veio a ideia (inspirações)
+- **Organizar emoções em eixos simples** (energia/valência) vem de materiais de **SEL** como o **RULER/Mood Meter** do Yale, ajudando a transformar sentimentos em **informação prática** [2][3].  
+- **Usar batimentos/HRV** como **proxy de arousal/estresse** é comum em pesquisas (útil como **contexto**, não diagnóstico) [4][5].  
+- **Prioridade por cores** no estilo **semáforo** (verde/amarelo/vermelho) é um padrão de **comunicação instantânea** inspirado em **triagem** (ex.: START) [6][7].
+
+### O ganho na prática
+Com o TheraLink, a sessão começa **mais informada**: em poucos minutos, você tem uma **fotografia do grupo** (ex.: “metade verde, 30% amarelo, 20% vermelho; BPM médio 78; ansiedade média 2,0”). Isso ajuda a **escolher dinâmicas**, **priorizar atenção** e **acompanhar a evolução** ao longo do encontro — tudo **sem internet**, com **baixo custo** e **operação simples**.
 
 ---
 
@@ -47,7 +71,7 @@ Em escolas e projetos sociais, muitas vezes **não há internet estável**. Psic
 ## 4) Requisitos Não Funcionais (RNF)
 - **RNF01.** Operação **100% offline**.  
 - **RNF02.** Preparado para **ambientes sem Wi-Fi externo** (AP próprio).  
-- **RNF03.** **Interação rápida**: ~**30 s por pessoa** (meta).  
+- **RNF03.** **Interação rápida**: ~**60 s por pessoa** (meta).  
 - **RNF04.** Interface **inclusiva** com feedback **visual** (OLED/cores/LEDs).  
 - **RNF05.** **Privacidade**: processamento local (sem Nuvem; exportação agregada em CSV).  
 - **RNF06.** **Baixo custo** e montagem simples.
@@ -124,3 +148,41 @@ Periféricos utilizados:
    ninja
 3. Foi utilizado VSCode no desenvolvimento do projeto, recomendado caso use Windows.
 4. Nesse vídeo, tem um tutorial de como rodar projetos com a BitDogLab no VSCode: https://www.youtube.com/watch?v=uVK-OHy2XZg
+
+## 10) Imagens
+
+![Protótipo do Projeto](./etapa3/fotos/image.png)
+
+Na imagem acima é possível ver a BitDogLab conectada a um extensor i2c, que está fazendo a ponte entre os sensores de cor e o oxímetro com a BitDogLab. Também é possível ver o Display OLED disparando o texto para o usuário, porém é muito pequeno, por conta disso criamos um display externo que roda na mesma página do painel do profissional, para melhor visualização dos textos, com ele é possível que o usuário leia com mais facilidade os textos do display OLED:
+
+![Tela do Display Externo](./etapa3/telas/oled_externo.png)
+
+
+![Painel do Profissional](./etapa3/telas/painel.png)
+
+Na imagem acima é possível ver o painel do profissional, que contêm um gráfico de barras contendo a quantidade de pacientes em cada grupo, o BPM médio do grupo, ansiedade, humor e energia média. Também é possível agrupar os dados por cada grupo, e fazer o download dos dados em uma planilha no formato CSV.
+
+## Referências
+
+1. UNICEF & ITU (2020) - “Two thirds of the world’s school-age children have no internet access at home.”
+Link: https://www.unicef.org/press-releases/two-thirds-worlds-school-age-children-have-no-internet-access-home-new-unicef-itu
+
+Link PDF: https://www.itu.int/en/ITU-D/Statistics/Documents/publications/UNICEF/How-many-children-and-young-people-have-internet-access-at-home-2020_v2final.pdf 
+
+2. Yale Center for Emotional Intelligence — RULER (institucional)
+Link: https://medicine.yale.edu/childstudy/services/community-and-schools-programs/center-for-emotional-intelligence/ruler/
+
+3. RULER Approach — Mood Meter (recursos)
+Link: https://rulerapproach.org/ruler-resources-for-families/
+
+4. Shaffer, F.; Ginsberg, J. (2017) — “An Overview of Heart Rate Variability Metrics and Norms.” Frontiers in Public Health. 
+Link: https://www.frontiersin.org/articles/10.3389/fpubh.2017.00258/full 
+
+5. Kim, H. G., et al. (2018) — “Stress and Heart Rate Variability: A Meta-Analysis and Review of the Literature.” Psychiatry Investigation.
+Link: https://pmc.ncbi.nlm.nih.gov/articles/PMC5900369/
+
+6. FEMA — CERT Basic Training Participant Manual (2011) — “Simple Triage and Rapid Treatment (START)” (PDF)
+Link: https://www.fema.gov/sites/default/files/2020-07/fema-cert_basic-training-participant-manual_01-01-2011.pdf
+
+7. CERT-LA — START (folheto) (PDF)
+Link: https://www.cert-la.com/downloads/education/english/start.pdf

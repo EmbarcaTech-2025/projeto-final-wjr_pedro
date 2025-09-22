@@ -54,12 +54,6 @@ Com o TheraLink, a sessão começa **mais informada**: em poucos minutos, você 
 
 ---
 
-## Imagem da BitDogLab rodando o sistema
-![BitDogLab rodando](./etapa3/fotos/image.png "BitDogLab rodando")
-
-## Imagem do Painel Web
-![Painel Web](./etapa3/telas/painel.png "Painel Web")
-
 ## 3) Requisitos Funcionais (RF)
 - **RF01.** Acesso via **portal web local** (HTML/JS + JSON) hospedado pelo próprio dispositivo (**sem internet**).  
 - **RF02.** Medição de **BPM** com **MAX30102** (suporte a MAX30100/30102).  

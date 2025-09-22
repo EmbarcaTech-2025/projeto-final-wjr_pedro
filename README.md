@@ -48,6 +48,10 @@ Com o TheraLink, a sessão começa **mais informada**: em poucos minutos, você 
 
 > **Observação:** os dados ficam **locais** (RAM). O **CSV** é um **agregado** para exportação rápida. Não há armazenamento em nuvem.
 
+## Imagem do Fluxograma de Software
+
+![Fluxograma](./etapa2/images/fluxogram.png)
+
 ---
 
 ## Imagem da BitDogLab rodando o sistema
@@ -79,19 +83,27 @@ Com o TheraLink, a sessão começa **mais informada**: em poucos minutos, você 
 ---
 
 ## 5) Hardware & Ligações (BitDogLab)
+
+## Diagrama de Hardware
+
+![Diagrama de Hardware](./etapa2/images/hardware_diagram.png)
+
+## Blocos Funcionais
+
+![Blocos Funcionais](./etapa2/images/blocos.png)
+
 Periféricos utilizados:
+  - **OLED (SSD1306) — I²C1**  
+    `SDA = GP14`, `SCL = GP15`, **ADDR = 0x3C`
+  - **Sensor de Cor (TCS34725) — I²C0**  
+    `SDA = GP0`, `SCL = GP1`
+  - **Oxímetro (MAX3010x) — I²C0**  
+    `SDA = GP0`, `SCL = GP1`
+  - **Botões**: `BUTTON_A = GP5`, `BUTTON_B = GP6`  
+  - **Joystick**: `X = ADC1/GP27`, `Y = ADC0/GP26`, **Botão = GP22`
 
-- **OLED (SSD1306) — I²C1**  
-  `SDA = GP14`, `SCL = GP15`, **ADDR = 0x3C`
-- **Sensor de Cor (TCS34725) — I²C0**  
-  `SDA = GP0`, `SCL = GP1`
-- **Oxímetro (MAX3010x) — I²C0**  
-  `SDA = GP0`, `SCL = GP1`
-- **Botões**: `BUTTON_A = GP5`, `BUTTON_B = GP6`  
-- **Joystick**: `X = ADC1/GP27`, `Y = ADC0/GP26`, **Botão = GP22`
-
-> **SSID do AP:** `TheraLink` (aberto, sem senha, conforme `web_ap.c`).  
-> **Gateway/host:** `192.168.4.1`.
+  > **SSID do AP:** `TheraLink` (aberto, sem senha, conforme `web_ap.c`).  
+  > **Gateway/host:** `192.168.4.1`.
 
 ## 6) Materiais (versão atual)
 - **1× BitDogLab** (RP2040 Pico W com **OLED**, **matriz 5×5**, **joystick**, **Wi-Fi**)

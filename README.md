@@ -4,9 +4,14 @@
 
 ### O que é o projeto
 
-O **TheraLink** é um sistema que você liga e começa a usar **sem internet**. Ela cria uma **rede Wi-Fi própria**; você conecta o **celular** ou **notebook** nessa rede e abre um **painel** que mostra, em tempo real, como o grupo está chegando para a atividade.  
-Cada participante faz um **check-in rápido**: coloca o dedo no **sensor de batimentos** para medir **BPM** e responde, na telinha com joystick, três perguntas simples sobre **energia**, **humor** e **ansiedade**. Com isso, o sistema sugere uma **cor de prioridade** (**verde**, **amarelo** ou **vermelho**) e **confirma** a cor com um **sensor de leitura de cores**.  
-Tudo acontece **localmente**, dentro do aparelho: nada vai para a nuvem, os dados ficam **anônimos** e você ainda pode **baixar um resumo** em CSV no final para registrar como estava o clima do grupo.
+O **TheraLink** é um dispositivo de monitoramento coletivo criado para **salas de aula, grupos terapêuticos, oficinas e encontros comunitários**, especialmente em locais onde **não há internet confiável**. Ele permite que o responsável pela atividade obtenha, em poucos minutos, um **retrato fiel do estado emocional e físico do grupo** antes do início da sessão.
+
+Cada participante faz um **check-in rápido**: coloca o dedo em um **sensor de batimentos cardíacos (MAX30102)**, responde na **tela OLED** (usando o joystick) a três perguntas sobre **energia**, **humor** e **ansiedade**, e confirma uma **pulseira ou token colorido** diante do **sensor de cor TCS34725**. Com essas informações, o sistema calcula um **nível de risco** e classifica cada pessoa em **verde, amarelo ou vermelho**, indicando se o grupo chega mais calmo, equilibrado ou agitado.
+
+Todo o processamento acontece **localmente**, dentro da **BitDogLab (Raspberry Pi Pico W)**. A placa cria uma **rede Wi-Fi própria** apenas para exibir os resultados: o educador ou terapeuta se conecta a essa rede e acessa um **painel web local** para acompanhar, em tempo real, a média de batimentos, a distribuição das cores e as estatísticas de energia, humor e ansiedade. Nada é enviado para a internet e os dados permanecem **anônimos**, mas podem ser exportados em **CSV** para registro posterior.
+
+Em resumo, o TheraLink oferece uma **fotografia instantânea do clima do grupo**, ajudando o profissional a **escolher dinâmicas adequadas** e a **priorizar cuidados** antes mesmo de a atividade começar.
+
 
 > **Explicação técnica:** a placa é uma **BitDogLab (Pico W)**. Ela sobe um **ponto de acesso Wi-Fi**, roda **DHCP/DNS/HTTP**, lê o **MAX30102** (sensor batimentos) e o **TCS34725** (sensor cor), mostra mensagens no **OLED** e recebe respostas pelo **joystick**. A **prioridade** é calculada combinando BPM + respostas; as **estatísticas** ficam em memória e aparecem no painel web local.
 

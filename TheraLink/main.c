@@ -1,5 +1,4 @@
-// main.c — Triagem -> recomenda pulseira -> valida cor -> registra métricas
-// /display espelha OLED; /survey no painel.
+// Fluxo: BPM -> SURVEY no painel -> recomenda pulseira -> valida cor -> registra métricas
 
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
@@ -18,31 +17,40 @@
 #include "src/stats.h"
 #include "src/web_ap.h"
 
-// I2C / pinos
+// ==== OLED em I2C1 (BitDog) ====
 #define OLED_I2C   i2c1
 #define OLED_SDA   14
 #define OLED_SCL   15
 #define OLED_ADDR  0x3C
 
-#define COL_I2C    i2c0
+// ==== SENSORES no I2C0 (EXTENSOR) ====
+#define COL_I2C    i2c0   // TCS34725
 #define COL_SDA    0
 #define COL_SCL    1
 
-#define OXI_I2C    i2c0
+#define OXI_I2C    i2c0   // MAX3010x
 #define OXI_SDA    0
 #define OXI_SCL    1
 
-// Botões
+// Botões BitDog
 #define BUTTON_A   5
 #define BUTTON_B   6
 
-// Joystick
-#define JOY_ADC_Y   26
-#define JOY_ADC_X   27
+// Joystick (apenas botão para sair do relatório)
 #define JOY_BTN     22
 
 static ssd1306_t oled;
 static bool oled_ok = false;
+
+// --- Detecção robusta de cor ---
+static bool     color_baseline_ready = false;
+static uint32_t color_baseline_until = 0;
+static float    c0_r=0.f, c0_g=0.f, c0_b=0.f, c0_c=0.f;
+static uint32_t c0_n = 0;
+
+#define C_MIN        0.06f
+#define CHROMA_MIN   0.14f
+#define DELTA_C_MIN  0.25f
 
 static void i2c_setup(i2c_inst_t *i2c, uint sda, uint scl, uint hz) {
     i2c_init(i2c, hz);
@@ -69,7 +77,20 @@ static bool edge_press(bool now, bool *prev) {
     return fired;
 }
 
-/* ---------- Estados ---------- */
+static void joystick_init(void) {
+    gpio_init(JOY_BTN);
+    gpio_set_dir(JOY_BTN, GPIO_IN);
+    gpio_pull_up(JOY_BTN);
+}
+typedef struct { bool btn_edge; } joy_events_t;
+static joy_events_t joystick_poll(void) {
+    static bool btn_prev=false;
+    joy_events_t ev = {0};
+    bool btn_now = !gpio_get(JOY_BTN);
+    ev.btn_edge = edge_press(btn_now, &btn_prev);
+    return ev;
+}
+
 typedef enum {
     ST_ASK = 0,
     ST_OXI_RUN,
@@ -84,25 +105,15 @@ typedef enum {
 
 static const char* cor_nome(stat_color_t c) {
     switch (c) {
-        case STAT_COLOR_VERDE:   return "VERDE";
-        case STAT_COLOR_AMARELO: return "AMARELA";
-        case STAT_COLOR_VERMELHO:return "VERMELHA";
+        case STAT_COLOR_VERDE: return "VERDE";
+        case STAT_COLOR_AMARELO: return "AMARELO";
+        case STAT_COLOR_VERMELHO: return "VERMELHO";
         default: return "?";
     }
 }
 
-/* ---------- Score por survey + BPM ---------- */
-static stat_color_t triage_from_survey(float bpm, const char bits[11]) {
-    int pos = 0; for (int i=0;i<10;i++) if (bits[i]=='1') pos++;
-    int score = pos;
-    if (bpm >= 100.f) score += 2; else if (bpm >= 90.f) score += 1;
-    if (bits[8]=='1') score += 2;  // evita grupo
-    if (bits[7]=='1') score += 2;  // crise agora
-    if (bits[9]=='1') score += 1;  // quer falar
-    if (score >= 6) return STAT_COLOR_VERMELHO;
-    if (score >= 3) return STAT_COLOR_AMARELO;
-    return STAT_COLOR_VERDE;
-}
+static float       bpm_final_buf = NAN;
+static stat_color_t cor_recomendada = STAT_COLOR_VERDE;
 
 int main(void) {
     stdio_init_all();
@@ -116,6 +127,8 @@ int main(void) {
     gpio_init(BUTTON_B); gpio_set_dir(BUTTON_B, GPIO_IN); gpio_pull_up(BUTTON_B);
     bool a_prev=false, b_prev=false;
 
+    joystick_init();
+
     stats_init();
     web_ap_start();
 
@@ -123,43 +136,37 @@ int main(void) {
     bool oxi_inited = false;
 
     state_t st = ST_ASK, last_st = (state_t)-1;
-    uint32_t now_ms=0, t_last=0, show_until_ms=0;
+    uint32_t t_last = 0, show_until_ms = 0;
 
-    float bpm_final_buf = NAN;
-    stat_color_t cor_recomendada = STAT_COLOR_VERDE;
-    char last_survey_bits[11] = {0}; // NOVO: guarda bits para salvar
+    // token para detectar nova submissão do survey
+    uint32_t survey_last_token = 0;
 
     while (true) {
-        now_ms = to_ms_since_boot(get_absolute_time());
-
-        bool a_now = !gpio_get(BUTTON_A);
-        bool b_now = !gpio_get(BUTTON_B);
-        bool a_edge = edge_press(a_now, &a_prev);
-        bool b_edge = edge_press(b_now, &b_prev);
+        uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        bool a_edge = edge_press(!gpio_get(BUTTON_A), &a_prev);
+        bool b_edge = edge_press(!gpio_get(BUTTON_B), &b_prev);
+        bool joy_btn_edge = joystick_poll().btn_edge;
 
         if (st != last_st) {
             switch (st) {
-            case ST_ASK:
-                oled_lines("Iniciar triagem?", "(A) Sim   (B) Nao", "", "");
-                break;
-            case ST_OXI_RUN:
-                oled_lines("Oximetro", "Posicione o dedo", "(B) Voltar", "");
-                break;
-            case ST_SURVEY_WAIT:
-                oled_lines("Aguardando respostas", "Abra /display", "Celular abrira /survey", "");
-                break;
-            case ST_TRIAGE_RESULT: {
-                char l2[26]; snprintf(l2,sizeof l2,"Pegue a pulseira");
-                char l3[26]; snprintf(l3,sizeof l3,"%s", cor_nome(cor_recomendada));
-                oled_lines("Recomendacao:", l2, l3, "Validaremos no sensor");
-                show_until_ms = now_ms + 2000;
-                break;
-            }
-            case ST_COLOR_INTRO:
-                oled_lines("Validar pulseira", "Aproxime a pulseira", "no sensor de cor", "");
-                show_until_ms = now_ms + 1200;
-                break;
-            default: break;
+                case ST_ASK:
+                    oled_lines("Iniciar triagem?", "(A) Sim   (B) Nao", "Botao Joy: Relatorio", "");
+                    break;
+                case ST_SURVEY_WAIT:
+                    oled_lines("Aguardando envio", "Responda no celular", "[SURVEY]", "(B) Cancelar");
+                    break;
+                case ST_TRIAGE_RESULT: {
+                    char l2[24]; snprintf(l2, sizeof l2, "Pegue a pulseira");
+                    char l3[24]; snprintf(l3, sizeof l3, "%s", cor_nome(cor_recomendada));
+                    oled_lines("Recomendacao:", l2, l3, "Validaremos no sensor");
+                    show_until_ms = now_ms + 3000;
+                    break;
+                }
+                case ST_COLOR_INTRO:
+                    oled_lines("Validar pulseira", "Aproxime a pulseira", "no sensor", "");
+                    show_until_ms = now_ms + 5000;
+                    break;
+                default: break;
             }
             last_st = st;
         }
@@ -168,7 +175,7 @@ int main(void) {
         case ST_ASK:
             if (a_edge) {
                 if (!oxi_inited) {
-                    bool ok=false;
+                    bool ok = false;
                     for (int tries=0; tries<3 && !ok; tries++) {
                         i2c_setup(OXI_I2C, OXI_SDA, OXI_SCL, 100000);
                         ok = oxi_init(OXI_I2C, OXI_SDA, OXI_SCL);
@@ -176,38 +183,56 @@ int main(void) {
                     }
                     oxi_inited = ok;
                 }
-                if (!oxi_inited) { oled_lines("MAX3010x nao encontrado","Verifique cabos","Voltando...",""); sleep_ms(1000); break; }
+                if (!oxi_inited) {
+                    oled_lines("MAX3010x nao encontrado", "Verifique cabos", "Voltando ao menu", "");
+                    sleep_ms(1200);
+                    st = ST_ASK;
+                    break;
+                }
                 bpm_final_buf = NAN;
-                last_survey_bits[0] = '\0';
+                web_set_survey_mode(false);
+                web_survey_reset();
                 oxi_start();
                 t_last = now_ms;
                 st = ST_OXI_RUN;
+            } else if (joy_btn_edge) {
+                st = ST_REPORT;
+                t_last = now_ms;
             }
             break;
 
         case ST_OXI_RUN: {
-            if (b_edge) { st = ST_ASK; break; }
+            if (b_edge) {
+                oled_lines("Oximetro cancelado", "Voltando ao menu...", "", "");
+                sleep_ms(700);
+                st = ST_ASK;
+                break;
+            }
             oxi_poll(now_ms);
-            if (now_ms - t_last > 180) {
+            if (now_ms - t_last > 200) {
                 t_last = now_ms;
                 oxi_state_t s = oxi_get_state();
-                if (s == OXI_WAIT_FINGER)      oled_lines("Oximetro","Posicione o dedo","(B) Voltar","");
-                else if (s == OXI_SETTLE)      oled_lines("Oximetro","Calibrando...","Mantenha o dedo","");
-                else if (s == OXI_RUN) {
+                if (s == OXI_WAIT_FINGER) {
+                    oled_lines("Oximetro ativo", "Posicione o dedo", "Aguardando...", "(B) Voltar");
+                } else if (s == OXI_SETTLE) {
+                    oled_lines("Oximetro ativo", "Calibrando...", "Mantenha o dedo", "(B) Voltar");
+                } else if (s == OXI_RUN) {
                     int n,tgt; oxi_get_progress(&n,&tgt);
-                    float live=oxi_get_bpm_live();
-                    char l2[22],l3[22];
-                    snprintf(l2,sizeof l2,"BPM~ %.1f", live);
-                    snprintf(l3,sizeof l3,"Validas: %d/%d", n,tgt);
+                    float live = oxi_get_bpm_live();
+                    char l2[22], l3[22];
+                    snprintf(l2, sizeof l2, "BPM~ %.1f", live);
+                    snprintf(l3, sizeof l3, "Validas: %d/%d", n, tgt);
                     oled_lines("Medindo...", l2, l3, "(B) Voltar");
                 } else if (s == OXI_DONE) {
                     bpm_final_buf = oxi_get_bpm_final();
-                    char l2[22]; snprintf(l2,sizeof l2,"BPM FINAL: %.1f", bpm_final_buf);
+                    char l2[22]; snprintf(l2, sizeof l2, "BPM FINAL: %.1f", bpm_final_buf);
                     oled_lines("Concluido!", l2, "", "");
-                    show_until_ms = now_ms + 1200;
+                    show_until_ms = now_ms + 1500;
                     st = ST_SHOW_BPM;
                 } else if (s == OXI_ERROR) {
-                    oled_lines("ERRO oximetro","Cheque conexoes","",""); sleep_ms(1200); st=ST_ASK;
+                    oled_lines("ERRO no oximetro", "Cheque conexoes", "", "");
+                    sleep_ms(1500);
+                    st = ST_ASK;
                 }
             }
             break;
@@ -215,120 +240,185 @@ int main(void) {
 
         case ST_SHOW_BPM:
             if ((int32_t)(show_until_ms - now_ms) <= 0) {
-                web_survey_begin();
-                oled_lines("Aguardando respostas","No celular abrir","/display (abrira /survey)","");
+                // Liga survey no painel e sincroniza token base
+                uint32_t tok0=0; web_survey_peek(NULL, &tok0);
+                survey_last_token = tok0;
+                web_survey_reset();
+                web_set_survey_mode(true);
+                oled_lines("Responda no painel", "Abrir /survey no celular", "[SURVEY]", "");
                 st = ST_SURVEY_WAIT;
             }
             break;
 
         case ST_SURVEY_WAIT: {
-            char bits[11]={0};
-            if (web_take_survey(bits)) {
-                memcpy(last_survey_bits, bits, sizeof last_survey_bits);
+            uint16_t bits=0; uint32_t tok=0;
+            web_survey_peek(&bits, &tok);
+            if (tok != survey_last_token) {
+                survey_last_token = tok;
                 float bpm_ok = isnan(bpm_final_buf) ? 80.f : bpm_final_buf;
-                cor_recomendada = triage_from_survey(bpm_ok, bits);
+
+                int risk = 0;
+                if (bits & (1u<<0)) risk += 0; // dormiu bem? (Sim = OK)
+                if (bits & (1u<<1)) risk += 2; // conflito forte
+                if (bits & (1u<<2)) risk += 2; // muito nervoso(a)
+                if (bits & (1u<<3)) risk += 1; // dificuldade de concentração
+                if (bits & (1u<<4)) risk += 3; // risco de crise
+                if (bits & (1u<<5)) risk += 1; // evitando grupo
+                if (bits & (1u<<6)) risk += 3; // quer falar com adulto
+                if (bits & (1u<<7)) risk += 0; // comeu/hidratou? (Sim = OK)
+                if (bits & (1u<<8)) risk += 2; // dor física
+                if (bits & (1u<<9)) risk += 0; // sente-se seguro? (Sim = OK)
+
+                int bpm_band = 0;
+                if (bpm_ok >= 100.f) bpm_band = 2;
+                else if (bpm_ok >= 85.f || bpm_ok < 55.f) bpm_band = 1;
+                risk += bpm_band;
+
+                if (risk >= 6)      cor_recomendada = STAT_COLOR_VERMELHO;
+                else if (risk >= 3) cor_recomendada = STAT_COLOR_AMARELO;
+                else                cor_recomendada = STAT_COLOR_VERDE;
+
+                char l2[24]; snprintf(l2, sizeof l2, "Pegue a pulseira");
+                char l3[24]; snprintf(l3, sizeof l3, "%s", cor_nome(cor_recomendada));
+                oled_lines("Recomendacao:", l2, l3, "Validaremos no sensor");
+                show_until_ms = now_ms + 3000;
                 st = ST_TRIAGE_RESULT;
+            } else {
+                oled_lines("Aguardando envio", "Responda no celular", "[SURVEY]", "(B) Cancelar");
+                if (b_edge) { web_set_survey_mode(false); st = ST_ASK; }
             }
             break;
         }
 
         case ST_TRIAGE_RESULT:
-            if ((int32_t)(show_until_ms - now_ms) <= 0) {
+            if ((int32_t)(show_until_ms - now_ms) <= 0 || a_edge) {
                 static bool cor_ready=false;
                 if (!cor_ready) {
                     i2c_setup(COL_I2C, COL_SDA, COL_SCL, 100000);
                     cor_ready = cor_init(COL_I2C, COL_SDA, COL_SCL);
                 }
                 if (!cor_ready) {
-                    oled_lines("TCS34725 nao encontrado","Pulando validacao","","");
-                    sleep_ms(800);
+                    oled_lines("TCS34725 nao encontrado", "Pulando validacao", "", "");
+                    sleep_ms(900);
                     stats_set_current_color((stat_color_t)STAT_COLOR_NONE);
                     st = ST_SAVE_AND_DONE;
                 } else {
+                    color_baseline_ready = false;
+                    color_baseline_until = now_ms + 800;
+                    c0_r = c0_g = c0_b = c0_c = 0.f; c0_n = 0;
                     st = ST_COLOR_INTRO;
                 }
             }
             break;
 
         case ST_COLOR_INTRO:
-            if ((int32_t)(show_until_ms - now_ms) <= 0) {
+            if ((int32_t)(show_until_ms - now_ms) <= 0 || a_edge) {
+                t_last = now_ms;
                 st = ST_COLOR_LOOP;
             }
             break;
 
-                case ST_COLOR_LOOP: {
-            static bool base_ok=false; static uint32_t until=0; static float c0=0; static int c0n=0;
-            uint32_t now = now_ms;
+        case ST_COLOR_LOOP: {
+            if (now_ms - t_last > 200) {
+                t_last = now_ms;
 
-            if (!base_ok) {
-                if (!until) { until = now + 700; c0=0; c0n=0; }
-                float rf,gf,bf,cf; if (cor_read_rgb_norm(&rf,&gf,&bf,&cf)) { c0+=cf; c0n++; }
-                // Mostra a cor já aqui
-                oled_lines("Validar pulseira", "Aproxime no sensor",
-                           cor_nome(cor_recomendada), "Medindo ambiente...");
-                if ((int32_t)(until - now) <= 0 && c0n>=3) { c0/= (float)c0n; base_ok=true; }
-            } else {
+                float rf,gf,bf,cf;
+                bool have = cor_read_rgb_norm(&rf,&gf,&bf,&cf);
+
+                if (!color_baseline_ready) {
+                    if (have) { c0_r+=rf; c0_g+=gf; c0_b+=bf; c0_c+=cf; c0_n++; }
+                    if ((int32_t)(color_baseline_until - now_ms) <= 0 && c0_n >= 3) {
+                        c0_r/= (float)c0_n; c0_g/= (float)c0_n; c0_b/= (float)c0_n; c0_c/= (float)c0_n;
+                        color_baseline_ready = true;
+                    }
+                    oled_lines("Validar pulseira", "Aproxime a pulseira", "no sensor", "Medindo ambiente...");
+                } else {
+                    if (have) {
+                        float maxc=fmaxf(rf,fmaxf(gf,bf));
+                        float minc=fminf(rf,fminf(gf,bf));
+                        float chroma=maxc-minc;
+                        float deltaC=(c0_c>1e-6f)? fabsf(cf-c0_c)/c0_c : 1.f;
+                        bool luz_ok=(cf>C_MIN), mudou_ok=(deltaC>DELTA_C_MIN), chroma_ok=(chroma>CHROMA_MIN);
+                        if (luz_ok && mudou_ok && chroma_ok) {
+                            cor_class_t cls=cor_classify(rf,gf,bf,cf);
+                            const char* nome=cor_class_to_str(cls);
+                            char l4[24]; snprintf(l4,sizeof l4,"Lido: %s  A=OK", nome);
+                            oled_lines("Validar pulseira","Aproxime e pressione A", l4, cor_nome(cor_recomendada));
+                        } else {
+                            oled_lines("Validar pulseira","Aproxime a pulseira","Leitura fraca...", cor_nome(cor_recomendada));
+                        }
+                    } else {
+                        oled_lines("Validar pulseira","Aproxime a pulseira","Sem leitura", cor_nome(cor_recomendada));
+                    }
+                }
+            }
+
+            if (a_edge) {
+                if (!color_baseline_ready) { oled_lines("Aguarde...","Medindo ambiente","",""); sleep_ms(600); break; }
                 float rf,gf,bf,cf;
                 if (cor_read_rgb_norm(&rf,&gf,&bf,&cf)) {
                     float maxc=fmaxf(rf,fmaxf(gf,bf));
                     float minc=fminf(rf,fminf(gf,bf));
                     float chroma=maxc-minc;
-                    float deltaC=(c0>1e-6f)? fabsf(cf-c0)/c0 : 1.f;
-                    bool ok=(cf>0.06f)&&(deltaC>0.25f)&&(chroma>0.14f);
-
-                    if (ok) {
+                    float deltaC=(c0_c>1e-6f)? fabsf(cf-c0_c)/c0_c : 1.f;
+                    bool luz_ok=(cf>C_MIN), mudou_ok=(deltaC>DELTA_C_MIN), chroma_ok=(chroma>CHROMA_MIN);
+                    if (luz_ok && mudou_ok && chroma_ok) {
                         cor_class_t cls=cor_classify(rf,gf,bf,cf);
-                        stat_color_t sc; bool m=true;
-                        switch(cls){
+                        stat_color_t sc; bool ok=true;
+                        switch (cls) {
                             case COR_VERDE:    sc=STAT_COLOR_VERDE;    break;
                             case COR_AMARELO:  sc=STAT_COLOR_AMARELO;  break;
                             case COR_VERMELHO: sc=STAT_COLOR_VERMELHO; break;
-                            default: m=false; break;
+                            default: ok=false; break;
                         }
-                        if (m && sc==cor_recomendada){
-                            // Sucesso — a própria palavra “VERDE/AMARELA/VERMELHA”
-                            // será colorida no /display.
-                            char msg[26]; snprintf(msg,sizeof msg,"Pulseira %s OK",cor_nome(sc));
-                            oled_lines(msg, "", "", "");
-                            show_until_ms = now + 700;
+                        if (ok && sc==cor_recomendada) {
+                            char msg[26]; snprintf(msg,sizeof msg,"Pulseira %s ok!", cor_nome(sc));
+                            oled_lines(msg,"","","");
                             stats_set_current_color(sc);
                             st = ST_SAVE_AND_DONE;
                         } else {
-                            // Mostra a cor recomendada SEMPRE na linha 3
-                            oled_lines("Pulseira incorreta", "Pegue a pulseira:",
-                                       cor_nome(cor_recomendada), "");
-                            sleep_ms(900);
+                            oled_lines("Pulseira incorreta","Pegue a pulseira:", cor_nome(cor_recomendada), "");
+                            sleep_ms(1000);
                         }
                     } else {
-                        // Mostra instrução, mas mantém a cor destacada na linha 3
-                        oled_lines("Validar pulseira", "Aproxime a pulseira",
-                                   cor_nome(cor_recomendada), "Aproxime melhor");
-                        sleep_ms(350);
+                        oled_lines("Sem leitura","Aproxime melhor","","");
+                        sleep_ms(700);
                     }
                 } else {
-                    // Sem leitura — ainda assim exibimos a cor no meio
-                    oled_lines("Validar pulseira", "Aproxime a pulseira",
-                               cor_nome(cor_recomendada), "Sem leitura");
-                    sleep_ms(350);
+                    oled_lines("Falha na leitura","Tente novamente","","");
+                    sleep_ms(700);
                 }
             }
             break;
         }
 
-
         case ST_SAVE_AND_DONE:
-            if ((int32_t)(show_until_ms - now_ms) <= 0) {
-                // agrega
-                if (last_survey_bits[0]) stats_add_survey_bits(last_survey_bits);
-                stats_inc_color(cor_recomendada);
-                if (!isnan(bpm_final_buf)) stats_add_bpm(bpm_final_buf);
-
-                oled_lines("Registro concluido","Obrigado!","","");
-                sleep_ms(800);
-                stats_set_current_color((stat_color_t)STAT_COLOR_NONE);
-                st = ST_ASK;
-            }
+            stats_inc_color(cor_recomendada);
+            if (!isnan(bpm_final_buf)) stats_add_bpm(bpm_final_buf);
+            oled_lines("Registro concluido","Obrigado!","","");
+            sleep_ms(900);
+            stats_set_current_color((stat_color_t)STAT_COLOR_NONE);
+            web_set_survey_mode(false);
+            st = ST_ASK;
             break;
+
+        case ST_REPORT: {
+            if (now_ms - t_last > 1000) {
+                t_last = now_ms;
+                stats_snapshot_t s; stats_get_snapshot(&s);
+                char l1[22], l2[22];
+                float bpm = s.bpm_mean_trimmed;
+                if (isnan(bpm)) snprintf(l1,sizeof l1,"BPM: --");
+                else            snprintf(l1,sizeof l1,"BPM: %.1f (n=%lu)", bpm,(unsigned long)s.bpm_count);
+                snprintf(l2,sizeof l2,"V:%lu A:%lu R:%lu",
+                        (unsigned long)s.cor_verde,
+                        (unsigned long)s.cor_amarelo,
+                        (unsigned long)s.cor_vermelho);
+                oled_lines("Relatorio Grupo", l1, l2, "Joy=sair");
+            }
+            if (joy_btn_edge) st = ST_ASK;
+            break;
+        }
 
         default: break;
         }

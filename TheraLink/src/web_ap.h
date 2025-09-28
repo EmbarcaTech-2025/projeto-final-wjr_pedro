@@ -1,6 +1,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -9,17 +10,26 @@ extern "C" {
 // Sobe o AP + DHCP/DNS + HTTP
 void web_ap_start(void);
 
-// Espelha as 4 linhas do OLED para a página /display e para /oled.json
+// Espelha as 4 linhas do OLED para /display e /oled.json
 void web_display_set_lines(const char *l1, const char *l2, const char *l3, const char *l4);
 
-/* ---- Integração do SURVEY ----
- * main.c chama web_survey_begin() quando entra na etapa do questionário.
- * O servidor passa a anunciar mode=1 em /survey_state.json.
- * Ao submeter /survey_submit?ans=XXXXXXXXXX, o servidor guarda as respostas
- * e web_take_survey() retorna true uma única vez com os bits.
- */
-void web_survey_begin(void);
-bool web_take_survey(char out_bits_10[11]); // 10 chars '0'/'1' + '\0'
+/* ===== Survey API (compatível com o main.c antigo) ===== */
+
+// Liga/desliga o “modo survey” (quando ON, /display redireciona para /survey)
+void web_set_survey_mode(bool on);
+
+// Limpa respostas pendentes (não altera o modo)
+void web_survey_reset(void);
+
+// Espia respostas (sem consumir).
+// - Se out_bits != NULL, recebe os 10 bits de resposta (bit i => Q(i+1)), em uint16_t.
+// - Se out_token != NULL, recebe o token monotônico que incrementa a cada envio.
+// Retorna true se há respostas pendentes desde o último reset/consumo.
+bool web_survey_peek(uint16_t *out_bits, uint32_t *out_token);
+
+/* ===== API nova (você pode usar se desejar) ===== */
+void web_survey_begin(void);                 // atalho: liga modo e limpa pendências
+bool web_take_survey(char out_bits_10[11]);  // consome respostas (string "##########")
 
 #ifdef __cplusplus
 }

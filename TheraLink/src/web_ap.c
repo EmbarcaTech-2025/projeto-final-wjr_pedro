@@ -1,9 +1,13 @@
-// Web AP com 3 rotas principais:
-//   /             -> Painel profissional (gráficos + filtros por cor)
-//   /display      -> Espelho do OLED (4 linhas ampliadas)
-//   /oled.json    -> JSON com as 4 linhas atuais do OLED
-//   /stats.json   -> Métricas agregadas (aceita ?color=verde|amarelo|vermelho)
-//   /download.csv -> CSV simples (fallback local)
+// Web AP com rotas:
+//   /                -> Painel do profissional
+//   /display         -> Espelho do OLED (sempre display)
+//   /oled.json       -> JSON com as 4 linhas do OLED
+//   /stats.json      -> Métricas agregadas (aceita ?color=verde|amarelo|vermelho)
+//   /download.csv    -> CSV simples (fallback local)
+//   /survey          -> Página única do questionário (10 perguntas sim/não)
+//   /survey_submit   -> Endpoint de submissão (?ans=10 bits)
+//   /survey_state.json -> {"mode":0|1} para o /display saber quando redirecionar
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -25,7 +29,6 @@
 #endif
 
 #define AP_SSID   "TheraLink"
-// AP aberto (sem senha)
 #define AP_PASS   ""
 #define HTTP_PORT 80
 
@@ -46,6 +49,25 @@ void web_display_set_lines(const char *l1, const char *l2, const char *l3, const
     snprintf(g_oled.l4, sizeof g_oled.l4, "%s", l4 ? l4 : "");
 }
 
+/* ---------- Estado do SURVEY ---------- */
+static volatile bool s_survey_mode = false;  // 1 = deve abrir /survey no painel
+static volatile bool s_survey_has  = false;  // 1 = novas respostas disponíveis
+static char s_survey_ans[12] = "";          // 10 bits + '\0'
+
+void web_survey_begin(void) {
+    s_survey_mode = true;
+    s_survey_has  = false;
+    s_survey_ans[0] = '\0';
+}
+
+bool web_take_survey(char out_bits_10[11]) {
+    if (!s_survey_has) return false;
+    memcpy(out_bits_10, s_survey_ans, 11);
+    s_survey_has  = false;
+    s_survey_mode = false; // encerra modo survey ao consumir
+    return true;
+}
+
 /* ---------- TX state (1 conexão por vez) ---------- */
 typedef struct {
     const char *buf;
@@ -54,7 +76,7 @@ typedef struct {
 } http_tx_t;
 
 static http_tx_t g_tx = {0};
-static char g_resp[8192]; // HTML/JSON/CSV é montado aqui
+static char g_resp[8192];
 
 static bool http_send_chunk(struct tcp_pcb *tpcb) {
     while (g_tx.off < g_tx.len) {
@@ -84,12 +106,11 @@ static err_t http_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len) {
 
 /* ---------- helpers: parse color query ---------- */
 static bool parse_color_query(const char *req, stat_color_t *out_color, bool *has_color) {
-    // Procura na 1a linha por "?color=xxx"
     *has_color = false;
     if (!req) return false;
 
-    const char *q = strstr(req, "GET /stats.json?");
-    if (!q) return true; // OK, mas sem parâmetro
+    const char *q = strstr(req, "GET /stats.json");
+    if (!q) return true;
 
     const char *p = strstr(q, "color=");
     if (!p) return true;
@@ -99,7 +120,7 @@ static bool parse_color_query(const char *req, stat_color_t *out_color, bool *ha
     if (!strncmp(p, "amarelo", 7))    { *out_color = STAT_COLOR_AMARELO; *has_color = true; return true; }
     if (!strncmp(p, "vermelho", 8))   { *out_color = STAT_COLOR_VERMELHO; *has_color = true; return true; }
 
-    return true; // parâmetro desconhecido => ignora e usa geral
+    return true;
 }
 
 /* ---------- HTML: Painel Profissional (/) ---------- */
@@ -119,7 +140,6 @@ static void make_html_pro(char *out, size_t outsz) {
         "canvas{width:100%;height:220px;background:#fafafa;border:1px solid #eee;border-radius:10px}"
         "button{padding:8px 10px;border-radius:10px;border:1px solid #ddd;background:#fff}"
         ".mini .kpi{font-size:26px;margin:4px 0}"
-        /* chips */
         ".chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}"
         ".chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #e2e2e6;border-radius:999px;background:#fff;cursor:pointer;user-select:none}"
         ".chip .dot{width:10px;height:10px;border-radius:999px;display:inline-block}"
@@ -235,11 +255,7 @@ static void make_html_display(char *out, size_t outsz) {
         "#l4{font-size:clamp(22px,7.2vh,44px)}"
         ".fade{animation:fade .22s ease}"
         "@keyframes fade{from{opacity:.45;transform:translateY(1px)}to{opacity:1;transform:none}}"
-        /* Coloração das palavras de cor */
-        ".tag{font-weight:900}"
-        ".tag.green{color:#12b886}"
-        ".tag.yellow{color:#fab005}"
-        ".tag.red{color:#fa5252}"
+        ".tag{font-weight:900}.tag.green{color:#12b886}.tag.yellow{color:#fab005}.tag.red{color:#fa5252}"
         "</style></head><body>"
         "<div class=panel>"
           "<div class=hdr>"
@@ -257,23 +273,17 @@ static void make_html_display(char *out, size_t outsz) {
         "function fs(){const d=document.documentElement; if(d.requestFullscreen) d.requestFullscreen();}"
         "let last=['','','',''];"
         "function esc(t){return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}"
-        "function colorize(t){"
-          "let x=esc(t||'');"
-          // feminino/masculino e maiúsc./minúsc. (Verde/VERDE, Amarela/AMARELA/Amarelo/AMARELO, Vermelha/VERMELHA/Vermelho/VERMELHO)
+        "function colorize(t){let x=esc(t||'');"
           "x=x.replace(/\\b(VERDE|Verde)\\b/g,'<span class=\"tag green\">$1</span>');"
           "x=x.replace(/\\b(AMARELA|Amarela|AMARELO|Amarelo)\\b/g,'<span class=\"tag yellow\">$1</span>');"
           "x=x.replace(/\\b(VERMELHA|Vermelha|VERMELHO|Vermelho)\\b/g,'<span class=\"tag red\">$1</span>');"
-          "return x;"
-        "}"
-        "async function tick(){"
-          "try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();"
-              "const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
-              "for(let i=0;i<4;i++){if(arr[i]!==last[i]){last[i]=arr[i];const id='l'+(i+1),el=document.getElementById(id);"
-                "el.classList.remove('fade');"
-                "el.innerHTML=colorize(arr[i])||'&nbsp;';"
-                "void el.offsetWidth; el.classList.add('fade');}}"
-          "}catch(e){}"
-        "}"
+          "return x;}"
+        "async function pollSurvey(){try{const r=await fetch('/survey_state.json',{cache:'no-store'});const s=await r.json();if(s&&s.mode===1){location.replace('/survey');}}catch(e){}}"
+        "async function tick(){try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
+          "for(let i=0;i<4;i++){if(arr[i]!==last[i]){last[i]=arr[i];const id='l'+(i+1),el=document.getElementById(id);"
+            "el.classList.remove('fade');el.innerHTML=colorize(arr[i])||'&nbsp;';void el.offsetWidth; el.classList.add('fade');}}"
+        "}catch(e){}}"
+        "setInterval(pollSurvey,500); pollSurvey();"
         "setInterval(tick,500); tick();"
         "</script></body></html>";
 
@@ -284,6 +294,98 @@ static void make_html_display(char *out, size_t outsz) {
         "Connection: close\r\n\r\n%s", body);
 }
 
+/* ---------- HTML: Survey (/survey) ---------- */
+static void make_html_survey(char *out, size_t outsz) {
+    // Se modo survey estiver desligado, oferece um "voltar" para o display
+    const char *body_prefix =
+        "<!doctype html><html lang=pt-br><head><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>TheraLink — Survey</title>"
+        "<style>"
+        "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:18px;background:#0f1220;color:#eef1f6}"
+        ".wrap{max-width:920px;margin:0 auto}"
+        "h1{font-size:22px;margin:0 0 12px}"
+        ".card{background:#13172a;border:1px solid #252b45;border-radius:14px;padding:16px;margin:12px 0}"
+        ".q{display:flex;justify-content:space-between;align-items:center;padding:12px 10px;border-bottom:1px solid #1e2440}"
+        ".q:last-child{border-bottom:none}"
+        ".lbl{max-width:74%;line-height:1.35}"
+        ".btns{display:flex;gap:8px}"
+        "button,.chip{padding:10px 12px;border-radius:12px;border:1px solid #2b3358;background:#0f1428;color:#eef1f6;cursor:pointer}"
+        ".primary{background:#2d6cdf;border-color:#2d6cdf}"
+        ".muted{opacity:.8}"
+        ".row{display:flex;gap:10px;flex-wrap:wrap}"
+        "a{color:#cfe1ff;text-decoration:none}"
+        "</style></head><body><div class=wrap>"
+        "<h1>Questionario rapido (10 perguntas)</h1>";
+
+    const char *body_main =
+        "<div id=content class=card>"
+        "<div class=q><div class=lbl>Teve dor forte hoje?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Comeu nas ultimas horas?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Dormiu bem?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Sente fadiga forte agora?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Teve conflito forte com alguem?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Se sentiu muito nervoso(a) hoje?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Teve dificuldade de concentrar nas ultimas horas?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Sente risco de ter uma crise agora?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Esta evitando estar com o grupo hoje?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Quer falar com um adulto apos o check-in?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "</div>"
+        "<div class=row>"
+        "<button id=send class=primary>Enviar respostas</button>"
+        "<a class=muted href='/display' id=back>Voltar ao display</a>"
+        "</div>"
+        "<p class=muted style='margin-top:8px'>Se a tela do display estiver nesta pagina, volte para <a href='/display'>/display</a>.</p>"
+        "<script>"
+        "const chips=[...document.querySelectorAll('.chip')];"
+        "const vals=new Array(10).fill(-1);"
+        "chips.forEach((c,idx)=>{"
+          "c.addEventListener('click',()=>{"
+            "const v=c.dataset.v; const q=Math.floor(chips.indexOf?chips.indexOf(c)/2:idx/2);"
+            "const qi=Math.floor(idx/2);"
+            "vals[qi]=Number(v);"
+            "const sibs=c.parentElement.querySelectorAll('.chip');"
+            "sibs.forEach(s=>s.style.outline='');"
+            "c.style.outline='2px solid #2d6cdf';"
+          "});"
+        "});"
+        "document.getElementById('send').onclick=()=>{"
+          "if(vals.some(v=>v<0)){alert('Responda todas as perguntas.');return;}"
+          "const bits=vals.map(v=>v?1:0).join('');"
+          "location.replace('/survey_submit?ans='+bits);"
+        "};"
+        "</script>";
+
+    const char *body_closed =
+        "<div class=card><p>Questionario encerrado.</p>"
+        "<p><a href='/display'>Voltar ao display</a></p></div>";
+
+    const char *end = "</div></body></html>";
+
+    if (s_survey_mode) {
+        snprintf(out, outsz,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/html; charset=UTF-8\r\n"
+            "Cache-Control: no-store\r\n"
+            "Connection: close\r\n\r\n%s%s%s", body_prefix, body_main, end);
+    } else {
+        snprintf(out, outsz,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/html; charset=UTF-8\r\n"
+            "Cache-Control: no-store\r\n"
+            "Connection: close\r\n\r\n%s%s%s", body_prefix, body_closed, end);
+    }
+}
+
+/* ---------- JSON: survey_state (/survey_state.json) ---------- */
+static void make_json_survey_state(char *out, size_t outsz) {
+    snprintf(out, outsz,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n\r\n"
+        "{\"mode\":%d}", s_survey_mode ? 1 : 0);
+}
 
 /* ---------- JSON: stats (/stats.json[?color=...]) ---------- */
 static void make_json_stats(char *out, size_t outsz, const char *req_line) {
@@ -340,7 +442,7 @@ static void make_json_oled(char *out, size_t outsz) {
     );
 }
 
-/* ---------- CSV (fallback simples) ---------- */
+/* ---------- CSV fallback (antigo) ---------- */
 static size_t dump_csv_fallback(char *out, size_t maxlen) {
     stats_snapshot_t s; stats_get_snapshot(&s);
     double bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.0 : s.bpm_mean_trimmed;
@@ -360,29 +462,36 @@ static size_t dump_csv_fallback(char *out, size_t maxlen) {
         (unsigned long)s.cor_vermelho
     );
 }
+
 /* ---------- CSV (download.csv) ---------- */
 static void make_csv(char *out, size_t outsz) {
-    // 1) Cabeçalhos HTTP
     size_t hdr_len = snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/csv; charset=UTF-8\r\n"
         "Content-Disposition: attachment; filename=\"theralink_dados.csv\"\r\n"
         "Cache-Control: no-store\r\n"
         "Connection: close\r\n\r\n");
-    if (hdr_len >= outsz) return; // sem espaço
+    if (hdr_len >= outsz) return;
 
-    // 2) Corpo CSV (agregado atual)
     size_t body_max = outsz - hdr_len;
     size_t csv_len  = stats_dump_csv(out + hdr_len, body_max);
 
-    // 3) Fecha a string e deixa strlen enxergar tudo
     size_t total = hdr_len + csv_len;
     if (total >= outsz) total = outsz - 1;
     out[total] = '\0';
 }
 
-
 /* ---------- HTTP ---------- */
+static void make_redirect_display(char *out, size_t outsz) {
+    // 303 + fallback HTML (melhor comportamento em navegadores embarcados)
+    snprintf(out, outsz,
+        "HTTP/1.1 303 See Other\r\n"
+        "Location: /display\r\n"
+        "Cache-Control: no-store\r\n"
+        "Connection: close\r\n\r\n"
+        "<!doctype html><meta http-equiv='refresh' content='0;url=/display'>OK");
+}
+
 static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     (void)arg; (void)err;
     if (!p) { tcp_close(tpcb); return ERR_OK; }
@@ -393,16 +502,54 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
     tcp_recved(tpcb, p->tot_len);
     pbuf_free(p);
 
-    bool want_stats   = (strncmp(req, "GET /stats.json",   15) == 0);
-    bool want_oled    = (strncmp(req, "GET /oled.json",    14) == 0);
-    bool want_display = (strncmp(req, "GET /display",      12) == 0);
-    bool want_csv = (memcmp(req, "GET /download.csv", 17) == 0);
+    // Checagens de rota (use memcmp com tamanho EXATO da "prefix string")
+    bool want_stats        = (memcmp(req, "GET /stats.json",   15) == 0);
+    bool want_oled         = (memcmp(req, "GET /oled.json",    14) == 0);
+    bool want_display      = (memcmp(req, "GET /display",      12) == 0);
+    bool want_csv          = (memcmp(req, "GET /download.csv", 17) == 0);
+    bool want_survey       = (memcmp(req, "GET /survey",       11) == 0); // vale também para "/survey HTTP/1.1"
+    bool want_survey_state = (memcmp(req, "GET /survey_state.json", 22) == 0);
+    bool want_submit       = (memcmp(req, "GET /survey_submit", 18) == 0); // *** conserta o bug do 19 vs 18 ***
 
-    if      (want_stats)   make_json_stats(g_resp, sizeof g_resp, req);
-    else if (want_oled)    make_json_oled (g_resp, sizeof g_resp);
-    else if (want_display) make_html_display(g_resp, sizeof g_resp);
-    else if (want_csv)     make_csv(g_resp, sizeof g_resp);
-    else                   make_html_pro(g_resp, sizeof g_resp);
+    if (want_submit) {
+        // Parse ans=########## (10 bits)
+        const char *a = strstr(req, "ans=");
+        char tmp[12] = {0};
+        if (a) {
+            a += 4;
+            size_t i = 0;
+            while (i < 10 && (a[i] == '0' || a[i] == '1')) { tmp[i] = a[i]; i++; }
+            tmp[i] = '\0';
+        }
+        if (tmp[0]) {
+            strncpy((char*)s_survey_ans, tmp, sizeof s_survey_ans - 1);
+            s_survey_ans[10] = '\0';
+            s_survey_has  = true;
+            s_survey_mode = false; // encerra o modo survey
+        }
+        make_redirect_display(g_resp, sizeof g_resp);
+    }
+    else if (want_survey_state) {
+        make_json_survey_state(g_resp, sizeof g_resp);
+    }
+    else if (want_survey) {
+        make_html_survey(g_resp, sizeof g_resp);
+    }
+    else if (want_stats) {
+        make_json_stats(g_resp, sizeof g_resp, req);
+    }
+    else if (want_oled) {
+        make_json_oled(g_resp, sizeof g_resp);
+    }
+    else if (want_display) {
+        make_html_display(g_resp, sizeof g_resp);
+    }
+    else if (want_csv) {
+        make_csv(g_resp, sizeof g_resp);
+    }
+    else {
+        make_html_pro(g_resp, sizeof g_resp);
+    }
 
     g_tx.buf = g_resp;
     g_tx.len = (u16_t)strlen(g_resp);
@@ -432,12 +579,11 @@ static void http_start(void) {
 }
 
 void web_ap_start(void) {
-    stats_init(); 
+    stats_init();
 
     if (cyw43_arch_init()) { printf("WiFi init falhou\n"); return; }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
 
-    // AP aberto (sem senha)
     cyw43_arch_enable_ap_mode(AP_SSID, NULL, CYW43_AUTH_OPEN);
     printf("AP SSID=%s (aberto, sem senha)\n", AP_SSID);
 

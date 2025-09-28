@@ -294,7 +294,11 @@ static void make_html_display(char *out, size_t outsz) {
         "#l4{font-size:clamp(22px,7.2vh,44px)}"
         ".fade{animation:fade .22s ease}"
         "@keyframes fade{from{opacity:.45;transform:translateY(1px)}to{opacity:1;transform:none}}"
-        ".tag{font-weight:900}.tag.green{color:#12b886}.tag.yellow{color:#fab005}.tag.red{color:#fa5252}"
+        /* tags coloridas */
+        ".tag{font-weight:900}"
+        ".tag.green{color:#12b886}"
+        ".tag.yellow{color:#fab005}"
+        ".tag.red{color:#fa5252}"
         "</style></head><body>"
         "<div class=panel>"
           "<div class=hdr>"
@@ -310,19 +314,35 @@ static void make_html_display(char *out, size_t outsz) {
         "</div>"
         "<script>"
         "function fs(){const d=document.documentElement; if(d.requestFullscreen) d.requestFullscreen();}"
-        "let last=['','','',''];"
+        "let last=['','','','']; let jumped=false;"
         "function esc(t){return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}"
-        "function colorize(t){let x=esc(t||'');"
-          "x=x.replace(/\\b(VERDE|Verde)\\b/g,'<span class=tag green>$1</span>');"
-          "x=x.replace(/\\b(AMARELA|Amarela|AMARELO|Amarelo)\\b/g,'<span class=tag yellow>$1</span>');"
-          "x=x.replace(/\\b(VERMELHA|Vermelha|VERMELHO|Vermelho)\\b/g,'<span class=tag red>$1</span>');"
-          "return x;}"
-        "async function pollSurvey(){try{const r=await fetch('/survey_state.json',{cache:'no-store'});const s=await r.json();if(s&&s.mode===1){location.replace('/survey');}}catch(e){}}"
-        "async function tick(){try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
-          "for(let i=0;i<4;i++){if(arr[i]!==last[i]){last[i]=arr[i];const id='l'+(i+1),el=document.getElementById(id);"
-            "el.classList.remove('fade');el.innerHTML=colorize(arr[i])||'&nbsp;';void el.offsetWidth; el.classList.add('fade');}}"
-        "}catch(e){}}"
-        "setInterval(pollSurvey,500); pollSurvey();"
+        // Colore VERDE/AMARELO/AMARELA/VERMELHO/VERMELHA (mai/min/caixa-alta)
+        "function colorize(t){"
+          "let x=esc(t||'');"
+          "x=x.replace(/\\b(verde|amarelo|amarela|vermelho|vermelha)\\b/gi, m=>{"
+            "const k=m.toLowerCase();"
+            "if(k==='verde') return '<span class=\"tag green\">'+m+'</span>';"
+            "if(k==='amarelo'||k==='amarela') return '<span class=\"tag yellow\">'+m+'</span>';"
+            "if(k==='vermelho'||k==='vermelha') return '<span class=\"tag red\">'+m+'</span>';"
+            "return m;"
+          "});"
+          "return x;"
+        "}"
+        "function wantsSurvey(arr){"
+          "const all=(arr.join(' ')||'').toLowerCase();"
+          "return all.includes('[survey]')||all.includes('abrir /survey')||all.includes('responda no painel')||all.includes('responda as perguntas');"
+        "}"
+        "async function tick(){"
+          "try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();"
+              "const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
+              // auto-redireciona uma vez quando detectar o marcador
+              "if(!jumped && wantsSurvey(arr)){ jumped=true; location.replace('/survey'); return; }"
+              "for(let i=0;i<4;i++){if(arr[i]!==last[i]){last[i]=arr[i];const id='l'+(i+1),el=document.getElementById(id);"
+                "el.classList.remove('fade');"
+                "el.innerHTML=colorize(arr[i])||'&nbsp;';"
+                "void el.offsetWidth; el.classList.add('fade');}}"
+          "}catch(e){}"
+        "}"
         "setInterval(tick,500); tick();"
         "</script></body></html>";
 
@@ -332,6 +352,7 @@ static void make_html_display(char *out, size_t outsz) {
         "Cache-Control: no-store\r\n"
         "Connection: close\r\n\r\n%s", body);
 }
+
 
 /* ---------- HTML: Survey (/survey) ---------- */
 static void make_html_survey(char *out, size_t outsz) {

@@ -112,8 +112,12 @@ static const char* cor_nome(stat_color_t c) {
     }
 }
 
-static float       bpm_final_buf = NAN;
+static float        bpm_final_buf = NAN;
 static stat_color_t cor_recomendada = STAT_COLOR_VERDE;
+
+// >>> NEW: token da submissão a ser atribuída à cor após validação
+static uint32_t survey_last_token = 0;
+static uint32_t survey_token_to_assign = 0;
 
 int main(void) {
     stdio_init_all();
@@ -137,9 +141,6 @@ int main(void) {
 
     state_t st = ST_ASK, last_st = (state_t)-1;
     uint32_t t_last = 0, show_until_ms = 0;
-
-    // token para detectar nova submissão do survey
-    uint32_t survey_last_token = 0;
 
     while (true) {
         uint32_t now_ms = to_ms_since_boot(get_absolute_time());
@@ -241,8 +242,10 @@ int main(void) {
         case ST_SHOW_BPM:
             if ((int32_t)(show_until_ms - now_ms) <= 0) {
                 // Liga survey no painel e sincroniza token base
-                uint32_t tok0=0; web_survey_peek(NULL, &tok0);
+                uint32_t tok0 = 0;
+                web_survey_peek(NULL, &tok0);
                 survey_last_token = tok0;
+                survey_token_to_assign = 0; // ainda não chegou uma nova submissão
                 web_survey_reset();
                 web_set_survey_mode(true);
                 oled_lines("Responda no painel", "Abrir /survey no celular", "[SURVEY]", "");
@@ -251,23 +254,39 @@ int main(void) {
             break;
 
         case ST_SURVEY_WAIT: {
-            uint16_t bits=0; uint32_t tok=0;
+            uint16_t bits = 0;
+            uint32_t tok  = 0;
             web_survey_peek(&bits, &tok);
+
             if (tok != survey_last_token) {
                 survey_last_token = tok;
+                survey_token_to_assign = tok; // <<< NEW: lacha o token para vincular à cor
+
                 float bpm_ok = isnan(bpm_final_buf) ? 80.f : bpm_final_buf;
 
+                /* Ordem atual do /survey (índices):
+                   0=Dormiu bem? (Sim=OK)
+                   1=Conflito forte? (Sim=risco)
+                   2=Muito nervoso? (Sim=risco)
+                   3=Dificuldade de concentrar? (Sim=risco)
+                   4=Risco de crise agora? (Sim=risco)
+                   5=Evitando grupo hoje? (Sim=risco)
+                   6=Quer falar com um adulto? (Sim=atenção)
+                   7=Comeu/hidratou adequadamente? (Sim=OK)
+                   8=Dor física relevante? (Sim=risco)
+                   9=Sente-se seguro no ambiente? (Sim=OK)
+                */
                 int risk = 0;
-                if (bits & (1u<<0)) risk += 0; // dormiu bem? (Sim = OK)
-                if (bits & (1u<<1)) risk += 2; // conflito forte
-                if (bits & (1u<<2)) risk += 2; // muito nervoso(a)
-                if (bits & (1u<<3)) risk += 1; // dificuldade de concentração
-                if (bits & (1u<<4)) risk += 3; // risco de crise
-                if (bits & (1u<<5)) risk += 1; // evitando grupo
-                if (bits & (1u<<6)) risk += 3; // quer falar com adulto
-                if (bits & (1u<<7)) risk += 0; // comeu/hidratou? (Sim = OK)
-                if (bits & (1u<<8)) risk += 2; // dor física
-                if (bits & (1u<<9)) risk += 0; // sente-se seguro? (Sim = OK)
+                if (!(bits & (1u<<0))) risk += 1;  // não dormiu bem
+                if (bits & (1u<<1))    risk += 2;  // conflito
+                if (bits & (1u<<2))    risk += 2;  // nervoso
+                if (bits & (1u<<3))    risk += 1;  // concentração
+                if (bits & (1u<<4))    risk += 3;  // crise
+                if (bits & (1u<<5))    risk += 1;  // evita grupo
+                if (bits & (1u<<6))    risk += 3;  // quer falar
+                if (!(bits & (1u<<7))) risk += 1;  // não comeu/hidratou
+                if (bits & (1u<<8))    risk += 2;  // dor
+                if (!(bits & (1u<<9))) risk += 2;  // não se sente seguro (opcional)
 
                 int bpm_band = 0;
                 if (bpm_ok >= 100.f) bpm_band = 2;
@@ -285,19 +304,23 @@ int main(void) {
                 st = ST_TRIAGE_RESULT;
             } else {
                 oled_lines("Aguardando envio", "Responda no celular", "[SURVEY]", "(B) Cancelar");
-                if (b_edge) { web_set_survey_mode(false); st = ST_ASK; }
+                if (b_edge) {
+                    web_set_survey_mode(false);
+                    web_survey_reset();
+                    st = ST_ASK;
+                }
             }
             break;
         }
 
         case ST_TRIAGE_RESULT:
             if ((int32_t)(show_until_ms - now_ms) <= 0 || a_edge) {
-                static bool cor_ready=false;
-                if (!cor_ready) {
+                static bool cor_ready_once=false;
+                if (!cor_ready_once) {
                     i2c_setup(COL_I2C, COL_SDA, COL_SCL, 100000);
-                    cor_ready = cor_init(COL_I2C, COL_SDA, COL_SCL);
+                    cor_ready_once = cor_init(COL_I2C, COL_SDA, COL_SCL);
                 }
-                if (!cor_ready) {
+                if (!cor_ready_once) {
                     oled_lines("TCS34725 nao encontrado", "Pulando validacao", "", "");
                     sleep_ms(900);
                     stats_set_current_color((stat_color_t)STAT_COLOR_NONE);
@@ -374,6 +397,12 @@ int main(void) {
                         if (ok && sc==cor_recomendada) {
                             char msg[26]; snprintf(msg,sizeof msg,"Pulseira %s ok!", cor_nome(sc));
                             oled_lines(msg,"","","");
+
+                            // >>> NEW: vincula a submissão do survey à cor validada
+                            if (survey_token_to_assign) {
+                                web_assign_survey_token_to_color(survey_token_to_assign, sc);
+                            }
+
                             stats_set_current_color(sc);
                             st = ST_SAVE_AND_DONE;
                         } else {

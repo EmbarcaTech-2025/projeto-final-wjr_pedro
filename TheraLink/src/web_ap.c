@@ -54,46 +54,84 @@ void web_display_set_lines(const char *l1, const char *l2, const char *l3, const
 static volatile bool   s_survey_mode = false; // 1 = /display manda para /survey
 static volatile bool   s_survey_has  = false; // 1 = novas respostas pendentes
 static char            s_survey_ans[12] = ""; // "##########" (10 bits) + '\0'
-static uint16_t        s_svy_last_bits = 0;   // última resposta codificada em bits
-static uint32_t        s_svy_token     = 0;   // incrementa a cada envio (peek usa)
-static uint32_t        s_svy_n = 0;           // nº envios
-static uint32_t        s_svy_yes[10] = {0};   // contagem "Sim" por pergunta
 
-/* ===== Compat: API antiga usada pelo main.c ===== */
-void web_set_survey_mode(bool on) { s_survey_mode = on; }
+/* Agregado global */
+static uint16_t        s_svy_last_bits = 0;   // última resposta (global, 10 bits)
+static uint32_t        s_svy_token     = 0;   // incrementa a cada envio (contador)
+static uint32_t        s_svy_last_token = 0;  // token da última submissão (para peek)
+static uint32_t        s_svy_n         = 0;   // nº envios (global)
+static uint32_t        s_svy_yes[10]   = {0}; // contagem "Sim" global
 
-void web_survey_reset(void) {
-    s_survey_has = false;
-    s_survey_ans[0] = '\0';
-    // não alteramos s_survey_mode nem zeramos agregados
+/* NEW: por cor */
+static stat_color_t    s_svy_color_latched = (stat_color_t)STAT_COLOR_NONE; // reservado
+static uint32_t        s_svy_n_c[STAT_COLOR_COUNT] = {0};                   // nº envios por cor
+static uint32_t        s_svy_yes_c[STAT_COLOR_COUNT][10] = {{0}};           // "Sim" por pergunta e por cor
+static uint16_t        s_svy_last_bits_c[STAT_COLOR_COUNT] = {0};           // última resposta (10 bits) por cor
+
+/* ================== Helpers internos ================== */
+static inline void bits_to_str10(uint16_t bits, char out[11]) {
+    for (int i = 0; i < 10; i++) out[i] = (bits & (1u << i)) ? '1' : '0';
+    out[10] = '\0';
 }
 
+/* ================== API usada pelo main.c ================== */
+// Liga/desliga o “modo survey” (o /display redireciona para /survey)
+void web_set_survey_mode(bool on) {
+    if (on) {
+        s_survey_mode = true;
+        s_survey_has  = false;      // limpa pendência anterior
+        s_svy_last_bits  = 0;
+        s_svy_last_token = 0;
+    } else {
+        s_survey_mode = false;
+    }
+}
+
+// Limpa apenas a pendência atual (não mexe em agregados)
+void web_survey_reset(void) {
+    s_survey_has = false;
+}
+
+// Espia a última submissão pendente (sem consumir)
 bool web_survey_peek(uint16_t *out_bits, uint32_t *out_token) {
     if (out_bits)  *out_bits  = s_svy_last_bits;
-    if (out_token) *out_token = s_svy_token;
+    if (out_token) *out_token = s_svy_last_token;
     return s_survey_has;
 }
 
-/* ===== API nova ===== */
-void web_survey_begin(void) {
-    s_survey_mode = true;
-    s_survey_has  = false;
-    s_survey_ans[0] = '\0';
+// Consome a submissão pendente e devolve bits + token
+bool web_take_survey_bits(uint16_t *out_bits, uint32_t *out_token) {
+    if (!s_survey_has) return false;
+    if (out_bits)  *out_bits  = s_svy_last_bits;
+    if (out_token) *out_token = s_svy_last_token;
+    s_survey_has = false; // consumiu
+    return true;
 }
+
+// Atribui a submissão (identificada por token) a uma cor depois da validação
+void web_assign_survey_token_to_color(uint32_t token, stat_color_t color) {
+    if (!((unsigned)color < STAT_COLOR_COUNT)) return;
+    if (token == 0 || token != s_svy_last_token) return; // só última submissão
+
+    uint16_t bits = s_svy_last_bits;
+    s_svy_last_bits_c[color] = bits;
+    s_svy_n_c[color] += 1;
+    for (int i = 0; i < 10; i++) {
+        if (bits & (1u << i)) s_svy_yes_c[color][i] += 1;
+    }
+}
+
+/* ============ Wrappers p/ compatibilidade antiga ============ */
+void web_survey_begin(void) { web_set_survey_mode(true); }
 bool web_take_survey(char out_bits_10[11]) {
     if (!s_survey_has) return false;
-    if (out_bits_10) memcpy(out_bits_10, s_survey_ans, 11);
-    s_survey_has  = false; // consome
+    if (out_bits_10) bits_to_str10(s_svy_last_bits, out_bits_10);
+    s_survey_has = false;
     return true;
 }
 
 /* ---------- TX state ---------- */
-typedef struct {
-    const char *buf;
-    u16_t len;
-    u16_t off;
-} http_tx_t;
-
+typedef struct { const char *buf; u16_t len; u16_t off; } http_tx_t;
 static http_tx_t g_tx = {0};
 static char g_resp[8192];
 
@@ -176,9 +214,7 @@ static void make_html_pro(char *out, size_t outsz) {
           "<div class='chip' data-c='vermelho'><span class='dot'></span><span>Grupo Vermelho</span></div>"
         "</div>"
         "<div class='hint'>Filtre por grupo para analisar BPM e distribuição por pulseira.</div>"
-
         "<div class=grid>"
-
           "<div class=card>"
             "<div class=title>Ritmo (BPM) e check-ins</div>"
             "<div class=row>"
@@ -188,13 +224,11 @@ static void make_html_pro(char *out, size_t outsz) {
             "</div>"
             "<canvas id=chartBpm></canvas>"
           "</div>"
-
           "<div class=card>"
             "<div class=title>Distribui&ccedil;&atilde;o por cor</div>"
             "<canvas id=chartCores></canvas>"
             "<div class='hint' id=fltDesc>Todos os grupos</div>"
           "</div>"
-
           "<div class=card>"
             "<div class=title>Alertas</div>"
             "<div class=row>"
@@ -203,7 +237,6 @@ static void make_html_pro(char *out, size_t outsz) {
               "<span class=pill>Quer falar: <b id=alTalk>0</b></span>"
             "</div>"
           "</div>"
-
           "<div class=card>"
             "<div class=title>Necessidades b&aacute;sicas</div>"
             "<div class=row>"
@@ -211,16 +244,13 @@ static void make_html_pro(char *out, size_t outsz) {
               "<div class=kpi><div class=l>Sem sono adequado</div><div id=basicSleep class=v>--</div></div>"
             "</div>"
           "</div>"
-
           "<div class=card style='grid-column:1 / -1'>"
             "<div class=title>Question&aacute;rio — contagem de <b>Sim</b> por pergunta</div>"
             "<canvas id=chartQs></canvas>"
             "<div class='title' style='font-size:16px;margin-top:10px'>&Uacute;ltima resposta</div>"
             "<div class=lst id=lastList></div>"
           "</div>"
-
         "</div>"
-
         "<script>"
         "let hist=[];const maxPts=180;let flt='all';"
         "const Cb=document.getElementById('chartBpm').getContext('2d');"
@@ -360,15 +390,6 @@ static void make_html_survey(char *out, size_t outsz) {
     }
 }
 
-/* ---------- JSON: survey_state (/survey_state.json) ---------- */
-static void make_json_survey_state(char *out, size_t outsz) {
-    snprintf(out, outsz,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: application/json; charset=UTF-8\r\n"
-        "Cache-Control: no-store, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\n"
-        "Connection: close\r\n\r\n{\"mode\":%d}", s_survey_mode ? 1 : 0);
-}
-
 /* ---------- JSON: stats (/stats.json[?color=...]) ---------- */
 static void make_json_stats(char *out, size_t outsz, const char *req_line) {
     stats_snapshot_t s;
@@ -381,23 +402,45 @@ static void make_json_stats(char *out, size_t outsz, const char *req_line) {
     float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
     const float bpm_live = 0.f;
 
-    // Survey agregados (mantidos aqui no web_ap.c)
-    uint32_t n   = s_svy_n;
-    uint32_t yes[10]; for (int i=0;i<10;i++) yes[i]=s_svy_yes[i];
-    float rate[10];
-    uint32_t sum_yes=0; for (int i=0;i<10;i++){ rate[i] = (n? (float)yes[i]/(float)n : 0.f); sum_yes+=yes[i]; }
-    float avg_yes = (n? (float)sum_yes/(float)n : 0.f);
-    uint16_t last_bits = s_svy_last_bits;
+    /* ====== Survey agregado (respeita o filtro por cor) ====== */
+    uint32_t n;
+    uint32_t yes[10];
+    uint16_t last_bits;
+    if (has && (unsigned)col < STAT_COLOR_COUNT) {
+        n = s_svy_n_c[col];
+        for (int i = 0; i < 10; i++) yes[i] = s_svy_yes_c[col][i];
+        last_bits = s_svy_last_bits_c[col];
+    } else {
+        n = s_svy_n;
+        for (int i = 0; i < 10; i++) yes[i] = s_svy_yes[i];
+        last_bits = s_svy_last_bits;
+    }
 
-    // Alertas e básicos (mapeamento por pergunta)
-    uint32_t al_crisis = yes[4];                 // Q5
-    uint32_t al_avoid  = yes[5];                 // Q6
-    uint32_t al_talk   = yes[6];                 // Q7
-    uint32_t basic_meal  = (n >= yes[7] ? n - yes[7] : 0); // Q8 -> não comeu/hidratou
-    uint32_t basic_sleep = (n >= yes[0] ? n - yes[0] : 0); // Q1 -> não dormiu bem
+    float rate[10]; uint32_t sum_yes = 0;
+    for (int i = 0; i < 10; i++) { rate[i] = n ? (float)yes[i] / (float)n : 0.f; sum_yes += yes[i]; }
+    float avg_yes = n ? (float)sum_yes / (float)n : 0.f;
 
+    /* Mapa coerente com a ordem atual do /survey (ver HTML):
+       idx 0 Dormiu bem?            (Sim=OK)        -> basic_sleep usa !yes[0]
+       idx 1 Conflito forte?        (Sim=alerta?)
+       idx 2 Muito nervoso?         (Sim=alerta?)
+       idx 3 Dificuldade concentrar (Sim=alerta?)
+       idx 4 Risco de crise agora   (Sim=ALERTA)    -> alerts.crisis = yes[4]
+       idx 5 Evitando grupo hoje    (Sim=ALERTA)    -> alerts.avoid  = yes[5]
+       idx 6 Quer falar com adulto  (Sim=ALERTA)    -> alerts.talk   = yes[6]
+       idx 7 Comeu/hidratou ok      (Sim=OK)        -> basic_meal usa !yes[7]
+       idx 8 Dor física relevante   (Sim=alerta?)
+       idx 9 Sente-se seguro        (Sim=OK)
+    */
+    uint32_t al_crisis   = yes[4];
+    uint32_t al_avoid    = yes[5];
+    uint32_t al_talk     = yes[6];
+    uint32_t basic_meal  = (n >= yes[7] ? n - yes[7] : 0); // não comeu/hidratou
+    uint32_t basic_sleep = (n >= yes[0] ? n - yes[0] : 0); // não dormiu bem
+
+    /* ----- monta JSON ----- */
     char body[6000]; size_t off = 0;
-    #define APPEND(...) off += (size_t)snprintf(body+off, sizeof(body)-off, __VA_ARGS__)
+    #define APPEND(...) off += (size_t)snprintf(body + off, sizeof(body) - off, __VA_ARGS__)
     APPEND("{");
       APPEND("\"bpm_live\":%.3f,", bpm_live);
       APPEND("\"bpm_mean\":%.3f,\"bpm_n\":%lu,", bpm_mean, (unsigned long)s.bpm_count);
@@ -405,12 +448,12 @@ static void make_json_stats(char *out, size_t outsz, const char *req_line) {
              (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho);
       APPEND("\"survey\":{");
         APPEND("\"n\":%lu,", (unsigned long)n);
-        APPEND("\"yes\":["); for (int i=0;i<10;i++){ APPEND("%lu",(unsigned long)yes[i]); if(i<9) APPEND(","); } APPEND("],");
-        APPEND("\"rate\":["); for (int i=0;i<10;i++){ APPEND("%.4f", rate[i]); if(i<9) APPEND(","); } APPEND("],");
+        APPEND("\"yes\":["); for (int i = 0; i < 10; i++) { APPEND("%lu", (unsigned long)yes[i]); if (i < 9) APPEND(","); } APPEND("],");
+        APPEND("\"rate\":["); for (int i = 0; i < 10; i++) { APPEND("%.4f", rate[i]); if (i < 9) APPEND(","); } APPEND("],");
         APPEND("\"avg_yes\":%.3f,", avg_yes);
         APPEND("\"last_bits\":%u,", (unsigned)last_bits);
         APPEND("\"alerts\":{\"crisis\":%lu,\"avoid\":%lu,\"talk\":%lu},",
-               (unsigned long)al_crisis,(unsigned long)al_avoid,(unsigned long)al_talk);
+               (unsigned long)al_crisis, (unsigned long)al_avoid, (unsigned long)al_talk);
         APPEND("\"basic\":{\"no_meal\":%lu,\"poor_sleep\":%lu}", (unsigned long)basic_meal, (unsigned long)basic_sleep);
       APPEND("}");
     APPEND("}");
@@ -421,6 +464,16 @@ static void make_json_stats(char *out, size_t outsz, const char *req_line) {
         "Content-Type: application/json; charset=UTF-8\r\n"
         "Cache-Control: no-store, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\n"
         "Connection: close\r\n\r\n%s", body);
+}
+
+/* ---------- JSON: survey_state (/survey_state.json) ---------- */
+static void make_json_survey_state(char *out, size_t outsz) {
+    snprintf(out, outsz,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n"
+        "Cache-Control: no-store, max-age=0\r\nPragma: no-cache\r\nExpires: 0\r\n"
+        "Connection: close\r\n\r\n"
+        "{\"mode\":%d}", s_survey_mode ? 1 : 0);
 }
 
 /* ---------- JSON: OLED (/oled.json) ---------- */
@@ -468,26 +521,37 @@ static void make_redirect_display(char *out, size_t outsz) {
         "<!doctype html><meta http-equiv='refresh' content='0;url=/display'>OK");
 }
 
+/* ---- Forward declarations de handlers usados no http_recv_cb ---- */
+static void make_json_stats(char *out, size_t outsz, const char *req_line);
+static void make_json_survey_state(char *out, size_t outsz);
+static void make_json_oled(char *out, size_t outsz);
+static void make_html_display(char *out, size_t outsz);
+static void make_html_survey(char *out, size_t outsz);
+static void make_html_pro(char *out, size_t outsz);
+static void make_csv(char *out, size_t outsz);
+static void make_redirect_display(char *out, size_t outsz);
+
 /* ---------- HTTP ---------- */
 static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     (void)arg; (void)err;
     if (!p) { tcp_close(tpcb); return ERR_OK; }
 
-    char req[256]={0};
-    size_t n = p->tot_len < sizeof(req)-1 ? p->tot_len : sizeof(req)-1;
+    char req[256] = {0};
+    size_t n = p->tot_len < sizeof(req) - 1 ? p->tot_len : sizeof(req) - 1;
     pbuf_copy_partial(p, req, n, 0);
     tcp_recved(tpcb, p->tot_len);
     pbuf_free(p);
 
-    bool want_stats        = (memcmp(req, "GET /stats.json",         15) == 0);
-    bool want_oled         = (memcmp(req, "GET /oled.json",          14) == 0);
-    bool want_display      = (memcmp(req, "GET /display",            12) == 0);
-    bool want_csv          = (memcmp(req, "GET /download.csv",       17) == 0);
-    bool want_survey       = (memcmp(req, "GET /survey",             11) == 0);
-    bool want_survey_state = (memcmp(req, "GET /survey_state.json",  22) == 0);
-    bool want_submit       = (memcmp(req, "GET /survey_submit",      18) == 0);
+    bool want_stats        = (memcmp(req, "GET /stats.json",        15) == 0);
+    bool want_oled         = (memcmp(req, "GET /oled.json",         14) == 0);
+    bool want_display      = (memcmp(req, "GET /display",           12) == 0);
+    bool want_csv          = (memcmp(req, "GET /download.csv",      17) == 0);
+    bool want_survey       = (memcmp(req, "GET /survey",            11) == 0);
+    bool want_survey_state = (memcmp(req, "GET /survey_state.json", 22) == 0);
+    bool want_submit       = (memcmp(req, "GET /survey_submit",     18) == 0);
 
     if (want_submit) {
+        // /survey_submit?ans=##########   (10 bits)
         const char *a = strstr(req, "ans=");
         char tmp[12] = {0};
         if (a) {
@@ -497,20 +561,25 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
             tmp[i] = '\0';
         }
         if (tmp[0]) {
-            strncpy((char*)s_survey_ans, tmp, sizeof s_survey_ans - 1);
-            s_survey_ans[10] = '\0';
-
-            // Converte para bits e agrega
+            // Converte "##########" -> uint16_t bits (bit i = pergunta i)
             uint16_t bits = 0;
-            for (int i=0; i<10 && tmp[i]; i++) if (tmp[i]=='1') bits |= (1u<<i);
-            s_svy_last_bits = bits;
-            s_svy_n++;
-            for (int i=0;i<10;i++) if (bits & (1u<<i)) s_svy_yes[i]++;
+            for (int i = 0; i < 10 && tmp[i]; i++) {
+                if (tmp[i] == '1') bits |= (1u << i);
+            }
 
-            s_svy_token++;     // novo token para o peek
-            s_survey_has  = true;
-            s_survey_mode = false;
+            // ---------- Atualiza estado de submissão pendente ----------
+            s_svy_last_bits  = bits;
+            s_svy_last_token = ++s_svy_token;   // novo token
+            s_survey_has     = true;
+            s_survey_mode    = false;           // fecha modo survey
+
+            // ---------- Agregado GLOBAL ----------
+            s_svy_n++;
+            for (int i = 0; i < 10; i++) {
+                if (bits & (1u << i)) s_svy_yes[i]++;
+            }
         }
+
         make_redirect_display(g_resp, sizeof g_resp);
     }
     else if (want_survey_state) {

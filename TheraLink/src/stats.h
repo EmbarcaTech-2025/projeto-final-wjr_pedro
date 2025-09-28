@@ -6,10 +6,11 @@
 #define stats_add_anxiety            appstats_add_anxiety
 #define stats_add_energy             appstats_add_energy
 #define stats_add_humor              appstats_add_humor
-#define stats_add_survey_bits        appstats_add_survey_bits
 #define stats_get_snapshot           appstats_get_snapshot
 #define stats_get_snapshot_by_color  appstats_get_snapshot_by_color
 #define stats_dump_csv               appstats_dump_csv
+// NEW: getter da cor corrente do ciclo
+#define stats_get_current_color      appstats_get_current_color
 
 #pragma once
 #include <stdint.h>
@@ -24,7 +25,7 @@ typedef enum {
     STAT_COLOR_COUNT
 } stat_color_t;
 
-// Cor “corrente” do ciclo (quando usuário capturou pulseira).
+// Cor corrente do “ciclo” (quando usuário capturou pulseira).
 // Use STAT_COLOR_NONE para “sem cor definida”.
 typedef enum {
     STAT_COLOR_NONE = 255
@@ -40,7 +41,6 @@ typedef struct {
     uint32_t  cor_amarelo;
     uint32_t  cor_vermelho;
 
-    // (legado – hoje não usamos no painel, mas mantidos por compat.)
     float     ans_mean;          // ansiedade média (1..4)
     uint32_t  ans_count;
 
@@ -49,29 +49,21 @@ typedef struct {
 
     float     humor_mean;        // humor médio (1..4)
     uint32_t  humor_count;
-
-    // === NOVO: Survey de 10 perguntas (sim/não) ===
-    // survey_n  -> total de respostas enviadas
-    // survey_yes[i] -> contagem de "sim" na pergunta i (0..9)
-    uint32_t  survey_n;
-    uint32_t  survey_yes[10];
 } stats_snapshot_t;
 
 void   stats_init(void);
 
-// Define a “cor corrente” para atribuir próximos dados (BPM/survey)
+// Define a “cor corrente” para atribuir próximos dados (BPM/ans/energia/humor)
 void   stats_set_current_color(stat_color_t c);
+
+// NEW: lê a cor corrente do ciclo (para o web travar a cor no início do survey)
+stat_color_t stats_get_current_color(void);
 
 void   stats_add_bpm(float bpm);
 void   stats_inc_color(stat_color_t c);
-
-// (legado – hoje não usamos no painel, mas mantidos por compat.)
 void   stats_add_anxiety(uint8_t level);
 void   stats_add_energy(uint8_t level);
 void   stats_add_humor(uint8_t level);
-
-// === NOVO: agrega os 10 bits do survey ('0'/'1', buffer de 11 com '\0') ===
-void   stats_add_survey_bits(const char bits_10[11]);
 
 // Snapshot geral (todas as cores)
 void   stats_get_snapshot(stats_snapshot_t *out);

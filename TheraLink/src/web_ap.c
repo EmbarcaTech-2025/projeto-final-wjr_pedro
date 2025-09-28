@@ -80,12 +80,12 @@ void web_set_survey_mode(bool on) {
     if (on) {
         s_survey_mode = true;
         s_survey_has  = false;      // limpa pendência anterior
-        s_svy_last_bits  = 0;
-        s_svy_last_token = 0;
+        // Importante: NÃO zere s_svy_last_bits/s_svy_last_token aqui
     } else {
         s_survey_mode = false;
     }
 }
+
 
 // Limpa apenas a pendência atual (não mexe em agregados)
 void web_survey_reset(void) {

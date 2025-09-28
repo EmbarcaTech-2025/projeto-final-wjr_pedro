@@ -240,78 +240,81 @@ int main(void) {
         }
 
         case ST_SHOW_BPM:
-            if ((int32_t)(show_until_ms - now_ms) <= 0) {
-                // Liga survey no painel e sincroniza token base
-                uint32_t tok0 = 0;
-                web_survey_peek(NULL, &tok0);
-                survey_last_token = tok0;
-                survey_token_to_assign = 0; // ainda não chegou uma nova submissão
-                web_survey_reset();
-                web_set_survey_mode(true);
-                oled_lines("Responda no painel", "Abrir /survey no celular", "[SURVEY]", "");
-                st = ST_SURVEY_WAIT;
-            }
-            break;
+    if ((int32_t)(show_until_ms - now_ms) <= 0) {
+        // Abre survey e só depois lê o último token
+        web_survey_reset();
+        web_set_survey_mode(true);
+
+        uint32_t tok0 = 0;
+        web_survey_peek(NULL, &tok0);   // memoriza token vigente (se houver)
+        survey_last_token = tok0;
+
+        oled_lines("Responda no painel", "Abrir /survey no celular", "[SURVEY]", "");
+        st = ST_SURVEY_WAIT;
+    }
+    break;
+
 
         case ST_SURVEY_WAIT: {
-            uint16_t bits = 0;
-            uint32_t tok  = 0;
-            web_survey_peek(&bits, &tok);
+    uint16_t bits = 0;
+    uint32_t tok  = 0;
+    bool has = web_survey_peek(&bits, &tok);
 
-            if (tok != survey_last_token) {
-                survey_last_token = tok;
-                survey_token_to_assign = tok; // <<< NEW: lacha o token para vincular à cor
+    // Só avança se existe submissão pendente E o token mudou (e não é 0)
+    if (has && tok != 0 && tok != survey_last_token) {
+        survey_last_token = tok;
 
-                float bpm_ok = isnan(bpm_final_buf) ? 80.f : bpm_final_buf;
+        float bpm_ok = isnan(bpm_final_buf) ? 80.f : bpm_final_buf;
 
-                /* Ordem atual do /survey (índices):
-                   0=Dormiu bem? (Sim=OK)
-                   1=Conflito forte? (Sim=risco)
-                   2=Muito nervoso? (Sim=risco)
-                   3=Dificuldade de concentrar? (Sim=risco)
-                   4=Risco de crise agora? (Sim=risco)
-                   5=Evitando grupo hoje? (Sim=risco)
-                   6=Quer falar com um adulto? (Sim=atenção)
-                   7=Comeu/hidratou adequadamente? (Sim=OK)
-                   8=Dor física relevante? (Sim=risco)
-                   9=Sente-se seguro no ambiente? (Sim=OK)
-                */
-                int risk = 0;
-                if (!(bits & (1u<<0))) risk += 1;  // não dormiu bem
-                if (bits & (1u<<1))    risk += 2;  // conflito
-                if (bits & (1u<<2))    risk += 2;  // nervoso
-                if (bits & (1u<<3))    risk += 1;  // concentração
-                if (bits & (1u<<4))    risk += 3;  // crise
-                if (bits & (1u<<5))    risk += 1;  // evita grupo
-                if (bits & (1u<<6))    risk += 3;  // quer falar
-                if (!(bits & (1u<<7))) risk += 1;  // não comeu/hidratou
-                if (bits & (1u<<8))    risk += 2;  // dor
-                if (!(bits & (1u<<9))) risk += 2;  // não se sente seguro (opcional)
+        /* Mapa das perguntas (ordem atual do /survey):
+           0=Dor forte hoje?           (Sim=risco)
+           1=Comeu nas ultimas horas?  (Sim=ok)
+           2=Dormiu bem?               (Sim=ok)
+           3=Fadiga forte agora?       (Sim=risco)
+           4=Conflito forte?           (Sim=risco)
+           5=Muito nervoso?            (Sim=risco)
+           6=Dificuldade concentrar?   (Sim=risco)
+           7=Risco de crise agora?     (Sim=risco)
+           8=Evitando ficar com grupo? (Sim=risco)
+           9=Quer falar com adulto?    (Sim=risco/atenção)
+        */
+        int risk = 0;
+        if (bits & (1u<<0)) risk += 2;        // dor
+        if (!(bits & (1u<<1))) risk += 1;     // não comeu/hidratou
+        if (!(bits & (1u<<2))) risk += 1;     // não dormiu bem
+        if (bits & (1u<<3)) risk += 1;        // fadiga
+        if (bits & (1u<<4)) risk += 2;        // conflito
+        if (bits & (1u<<5)) risk += 2;        // nervoso
+        if (bits & (1u<<6)) risk += 1;        // concentração
+        if (bits & (1u<<7)) risk += 3;        // crise
+        if (bits & (1u<<8)) risk += 1;        // evitando grupo
+        if (bits & (1u<<9)) risk += 3;        // quer falar
 
-                int bpm_band = 0;
-                if (bpm_ok >= 100.f) bpm_band = 2;
-                else if (bpm_ok >= 85.f || bpm_ok < 55.f) bpm_band = 1;
-                risk += bpm_band;
+        int bpm_band = 0;
+        if (bpm_ok >= 100.f) bpm_band = 2;
+        else if (bpm_ok >= 85.f || bpm_ok < 55.f) bpm_band = 1;
+        risk += bpm_band;
 
-                if (risk >= 6)      cor_recomendada = STAT_COLOR_VERMELHO;
-                else if (risk >= 3) cor_recomendada = STAT_COLOR_AMARELO;
-                else                cor_recomendada = STAT_COLOR_VERDE;
+        if (risk >= 6)      cor_recomendada = STAT_COLOR_VERMELHO;
+        else if (risk >= 3) cor_recomendada = STAT_COLOR_AMARELO;
+        else                cor_recomendada = STAT_COLOR_VERDE;
 
-                char l2[24]; snprintf(l2, sizeof l2, "Pegue a pulseira");
-                char l3[24]; snprintf(l3, sizeof l3, "%s", cor_nome(cor_recomendada));
-                oled_lines("Recomendacao:", l2, l3, "Validaremos no sensor");
-                show_until_ms = now_ms + 3000;
-                st = ST_TRIAGE_RESULT;
-            } else {
-                oled_lines("Aguardando envio", "Responda no celular", "[SURVEY]", "(B) Cancelar");
-                if (b_edge) {
-                    web_set_survey_mode(false);
-                    web_survey_reset();
-                    st = ST_ASK;
-                }
-            }
-            break;
+        char l2[24]; snprintf(l2, sizeof l2, "Pegue a pulseira");
+        char l3[24]; snprintf(l3, sizeof l3, "%s", cor_nome(cor_recomendada));
+        oled_lines("Recomendacao:", l2, l3, "Validaremos no sensor");
+        show_until_ms = now_ms + 3000;
+        st = ST_TRIAGE_RESULT;
+    } else {
+        oled_lines("Aguardando envio", "Responda no celular", "[SURVEY]", "(B) Cancelar");
+        if (b_edge) {
+            web_set_survey_mode(false);
+            web_survey_reset();
+            st = ST_ASK;
         }
+    }
+    break;
+}
+
 
         case ST_TRIAGE_RESULT:
             if ((int32_t)(show_until_ms - now_ms) <= 0 || a_edge) {
@@ -394,21 +397,22 @@ int main(void) {
                             case COR_VERMELHO: sc=STAT_COLOR_VERMELHO; break;
                             default: ok=false; break;
                         }
-                        if (ok && sc==cor_recomendada) {
-                            char msg[26]; snprintf(msg,sizeof msg,"Pulseira %s ok!", cor_nome(sc));
-                            oled_lines(msg,"","","");
+                        if (ok && sc == cor_recomendada) {
+                            char msg[26]; snprintf(msg, sizeof msg, "Pulseira %s ok!", cor_nome(sc));
+                            oled_lines(msg, "", "", "");
 
-                            // >>> NEW: vincula a submissão do survey à cor validada
-                            if (survey_token_to_assign) {
-                                web_assign_survey_token_to_color(survey_token_to_assign, sc);
+                            // Vincula a submissão do survey à cor validada
+                            if (survey_last_token != 0) {
+                                web_assign_survey_token_to_color(survey_last_token, sc);
                             }
 
                             stats_set_current_color(sc);
                             st = ST_SAVE_AND_DONE;
                         } else {
-                            oled_lines("Pulseira incorreta","Pegue a pulseira:", cor_nome(cor_recomendada), "");
+                            oled_lines("Pulseira incorreta", "Pegue a pulseira:", cor_nome(cor_recomendada), "");
                             sleep_ms(1000);
                         }
+
                     } else {
                         oled_lines("Sem leitura","Aproxime melhor","","");
                         sleep_ms(700);

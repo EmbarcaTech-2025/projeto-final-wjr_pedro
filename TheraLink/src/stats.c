@@ -11,14 +11,17 @@ static uint32_t s_bpm_n = 0;
 
 static uint32_t s_cor[STAT_COLOR_COUNT] = {0};
 
+// (legado)
 static uint32_t s_ans_count = 0;
 static double   s_ans_sum   = 0.0;
-
 static uint32_t s_energy_count = 0;
 static double   s_energy_sum   = 0.0;
-
 static uint32_t s_humor_count = 0;
 static double   s_humor_sum   = 0.0;
+
+// NOVO – survey
+static uint32_t s_survey_n = 0;
+static uint32_t s_survey_yes[10] = {0};
 
 static uint32_t s_sample_id = 0;
 
@@ -26,14 +29,17 @@ static uint32_t s_sample_id = 0;
 static float    s_bpm_c[STAT_COLOR_COUNT][MAX_BPM_SAMPLES];
 static uint32_t s_bpm_n_c[STAT_COLOR_COUNT] = {0};
 
+// (legado por cor)
 static uint32_t s_ans_count_c[STAT_COLOR_COUNT]    = {0};
 static double   s_ans_sum_c[STAT_COLOR_COUNT]      = {0.0, 0.0, 0.0};
-
 static uint32_t s_energy_count_c[STAT_COLOR_COUNT] = {0};
 static double   s_energy_sum_c[STAT_COLOR_COUNT]   = {0.0, 0.0, 0.0};
-
 static uint32_t s_humor_count_c[STAT_COLOR_COUNT]  = {0};
 static double   s_humor_sum_c[STAT_COLOR_COUNT]    = {0.0, 0.0, 0.0};
+
+// NOVO – survey por cor
+static uint32_t s_survey_n_c[STAT_COLOR_COUNT] = {0};
+static uint32_t s_survey_yes_c[STAT_COLOR_COUNT][10] = {0};
 
 // Cor “corrente” do ciclo (definida quando captura pulseira)
 static stat_color_t s_current_color = (stat_color_t)STAT_COLOR_NONE;
@@ -76,9 +82,14 @@ void appstats_init(void) {
 
     memset(s_cor, 0, sizeof(s_cor));
 
+    // legado
     s_ans_count = 0;   s_ans_sum = 0.0;
     s_energy_count = 0; s_energy_sum = 0.0;
     s_humor_count = 0;  s_humor_sum = 0.0;
+
+    // survey
+    s_survey_n = 0;
+    memset(s_survey_yes, 0, sizeof(s_survey_yes));
 
     memset(s_bpm_c, 0, sizeof(s_bpm_c));
     memset(s_bpm_n_c, 0, sizeof(s_bpm_n_c));
@@ -91,6 +102,9 @@ void appstats_init(void) {
 
     memset(s_humor_count_c, 0, sizeof(s_humor_count_c));
     memset(s_humor_sum_c,   0, sizeof(s_humor_sum_c));
+
+    memset(s_survey_n_c,    0, sizeof(s_survey_n_c));
+    memset(s_survey_yes_c,  0, sizeof(s_survey_yes_c));
 
     s_sample_id = 0;
     s_current_color = (stat_color_t)STAT_COLOR_NONE;
@@ -121,6 +135,7 @@ void appstats_inc_color(stat_color_t c) {
     }
 }
 
+// (legado)
 void appstats_add_anxiety(uint8_t level) {
     if (level < 1 || level > 4) return;
     s_ans_sum   += (double)level;
@@ -132,7 +147,6 @@ void appstats_add_anxiety(uint8_t level) {
     }
     s_sample_id++;
 }
-
 void appstats_add_energy(uint8_t level) {
     if (level < 1 || level > 4) return;
     s_energy_sum   += (double)level;
@@ -144,7 +158,6 @@ void appstats_add_energy(uint8_t level) {
     }
     s_sample_id++;
 }
-
 void appstats_add_humor(uint8_t level) {
     if (level < 1 || level > 4) return;
     s_humor_sum   += (double)level;
@@ -153,6 +166,28 @@ void appstats_add_humor(uint8_t level) {
     if ((unsigned)s_current_color < STAT_COLOR_COUNT) {
         s_humor_sum_c[s_current_color]   += (double)level;
         s_humor_count_c[s_current_color] += 1;
+    }
+    s_sample_id++;
+}
+
+// NOVO — agrega bits do survey
+void appstats_add_survey_bits(const char bits_10[11]) {
+    if (!bits_10) return;
+    // bits[0..9] são '0'/'1'
+    for (int i = 0; i < 10; i++) {
+        char b = bits_10[i];
+        if (b != '0' && b != '1') return; // invalida
+    }
+    s_survey_n++;
+    for (int i = 0; i < 10; i++) {
+        if (bits_10[i] == '1') s_survey_yes[i]++;
+    }
+
+    if ((unsigned)s_current_color < STAT_COLOR_COUNT) {
+        s_survey_n_c[s_current_color]++;
+        for (int i = 0; i < 10; i++) {
+            if (bits_10[i] == '1') s_survey_yes_c[s_current_color][i]++;
+        }
     }
     s_sample_id++;
 }
@@ -167,14 +202,17 @@ static void fill_snapshot_overall(stats_snapshot_t *out) {
     out->cor_amarelo  = s_cor[STAT_COLOR_AMARELO];
     out->cor_vermelho = s_cor[STAT_COLOR_VERMELHO];
 
+    // legado
     out->ans_count = s_ans_count;
     out->ans_mean  = (s_ans_count ? (float)(s_ans_sum / (double)s_ans_count) : NAN);
-
     out->energy_count = s_energy_count;
     out->energy_mean  = (s_energy_count ? (float)(s_energy_sum / (double)s_energy_count) : NAN);
+    out->humor_count  = s_humor_count;
+    out->humor_mean   = (s_humor_count ? (float)(s_humor_sum / (double)s_humor_count) : NAN);
 
-    out->humor_count = s_humor_count;
-    out->humor_mean  = (s_humor_count ? (float)(s_humor_sum / (double)s_humor_count) : NAN);
+    // survey
+    out->survey_n = s_survey_n;
+    for (int i = 0; i < 10; i++) out->survey_yes[i] = s_survey_yes[i];
 }
 
 void appstats_get_snapshot(stats_snapshot_t *out) {
@@ -200,15 +238,17 @@ void appstats_get_snapshot_by_color(stat_color_t color, stats_snapshot_t *out) {
     out->cor_amarelo  = (color == STAT_COLOR_AMARELO ? s_cor[STAT_COLOR_AMARELO] : 0);
     out->cor_vermelho = (color == STAT_COLOR_VERMELHO? s_cor[STAT_COLOR_VERMELHO]: 0);
 
-    // Ansiedade / Energia / Humor filtrados
+    // legado por cor
     out->ans_count = s_ans_count_c[color];
     out->ans_mean  = (s_ans_count_c[color] ? (float)(s_ans_sum_c[color] / (double)s_ans_count_c[color]) : NAN);
-
     out->energy_count = s_energy_count_c[color];
     out->energy_mean  = (s_energy_count_c[color] ? (float)(s_energy_sum_c[color] / (double)s_energy_count_c[color]) : NAN);
-
     out->humor_count = s_humor_count_c[color];
     out->humor_mean  = (s_humor_count_c[color] ? (float)(s_humor_sum_c[color] / (double)s_humor_count_c[color]) : NAN);
+
+    // survey por cor
+    out->survey_n = s_survey_n_c[color];
+    for (int i = 0; i < 10; i++) out->survey_yes[i] = s_survey_yes_c[color][i];
 }
 
 // CSV agregado para /download.csv
@@ -227,22 +267,41 @@ size_t appstats_dump_csv(char *dst, size_t maxlen) {
     size_t total = 0;
 
     int w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0,
-                     "bpm_mean,bpm_n,ans_mean,ans_n,energy_mean,energy_n,humor_mean,humor_n,cores_verde,cores_amarelo,cores_vermelho\r\n");
-    if (w < 0) return total;
-    total += (size_t)((w > 0) ? w : 0);
+                     "bpm_mean,bpm_n,ans_mean,ans_n,energy_mean,energy_n,humor_mean,humor_n,cores_verde,cores_amarelo,cores_vermelho,survey_n");
+    if (w < 0) return total; total += (size_t)((w > 0) ? w : 0);
     if (total >= maxlen) return maxlen;
 
+    // cabeçalhos q0..q9
+    for (int i=0;i<10;i++) {
+        w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0, ",q%d_yes", i);
+        if (w < 0) return total; total += (size_t)((w > 0) ? w : 0);
+        if (total >= maxlen) return maxlen;
+    }
+    w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0, "\r\n");
+    if (w < 0) return total; total += (size_t)((w > 0) ? w : 0);
+    if (total >= maxlen) return maxlen;
+
+    // linha de dados
     w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0,
-                 "%.3f,%lu,%.3f,%lu,%.3f,%lu,%.3f,%lu,%lu,%lu,%lu\r\n",
+                 "%.3f,%lu,%.3f,%lu,%.3f,%lu,%.3f,%lu,%lu,%lu,%lu,%lu",
                  bpm_mean,  (unsigned long)s.bpm_count,
                  ans_mean,  (unsigned long)s.ans_count,
                  ene_mean,  (unsigned long)s.energy_count,
                  hum_mean,  (unsigned long)s.humor_count,
                  (unsigned long)s.cor_verde,
                  (unsigned long)s.cor_amarelo,
-                 (unsigned long)s.cor_vermelho);
-    if (w < 0) return total;
-    total += (size_t)((w > 0) ? w : 0);
+                 (unsigned long)s.cor_vermelho,
+                 (unsigned long)s.survey_n);
+    if (w < 0) return total; total += (size_t)((w > 0) ? w : 0);
+    if (total >= maxlen) return maxlen;
+
+    for (int i=0;i<10;i++) {
+        w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0, ",%lu", (unsigned long)s.survey_yes[i]);
+        if (w < 0) return total; total += (size_t)((w > 0) ? w : 0);
+        if (total >= maxlen) return maxlen;
+    }
+    w = snprintf(dst + total, (total < maxlen) ? (maxlen - total) : 0, "\r\n");
+    if (w < 0) return total; total += (size_t)((w > 0) ? w : 0);
 
     if (total > maxlen) total = maxlen;
     return total;

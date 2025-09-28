@@ -1,12 +1,12 @@
 // Web AP com rotas:
-//   /                -> Painel do profissional
-//   /display         -> Espelho do OLED (sempre display)
+//   /                -> Painel do profissional (agora com KPIs e gráficos novos)
+//   /display         -> Espelho do OLED (redireciona p/ /survey via /survey_state.json)
 //   /oled.json       -> JSON com as 4 linhas do OLED
 //   /stats.json      -> Métricas agregadas (aceita ?color=verde|amarelo|vermelho)
-//   /download.csv    -> CSV simples (fallback local)
-//   /survey          -> Página única do questionário (10 perguntas sim/não)
+//   /download.csv    -> CSV agregado
+//   /survey          -> Questionário (10 perguntas sim/nao)
 //   /survey_submit   -> Endpoint de submissão (?ans=10 bits)
-//   /survey_state.json -> {"mode":0|1} para o /display saber quando redirecionar
+//   /survey_state.json -> {"mode":0|1}
 
 #include <stdio.h>
 #include <string.h>
@@ -50,7 +50,7 @@ void web_display_set_lines(const char *l1, const char *l2, const char *l3, const
 }
 
 /* ---------- Estado do SURVEY ---------- */
-static volatile bool s_survey_mode = false;  // 1 = deve abrir /survey no painel
+static volatile bool s_survey_mode = false;  // 1 = deve abrir /survey
 static volatile bool s_survey_has  = false;  // 1 = novas respostas disponíveis
 static char s_survey_ans[12] = "";          // 10 bits + '\0'
 
@@ -59,12 +59,11 @@ void web_survey_begin(void) {
     s_survey_has  = false;
     s_survey_ans[0] = '\0';
 }
-
 bool web_take_survey(char out_bits_10[11]) {
     if (!s_survey_has) return false;
     memcpy(out_bits_10, s_survey_ans, 11);
     s_survey_has  = false;
-    s_survey_mode = false; // encerra modo survey ao consumir
+    s_survey_mode = false;
     return true;
 }
 
@@ -133,11 +132,11 @@ static void make_html_pro(char *out, size_t outsz) {
         "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#f6f7fb;color:#111}"
         "nav{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}"
         "nav a{padding:8px 12px;border:1px solid #ddd;background:#fff;border-radius:10px;text-decoration:none;color:#111}"
-        ".grid{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:760px){.grid{grid-template-columns:1fr 1fr}}"
+        ".grid{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:860px){.grid{grid-template-columns:1.2fr .8fr}}"
         ".card{border:1px solid #e6e6e9;border-radius:14px;padding:14px;background:#fff;box-shadow:0 4px 20px rgba(0,0,0,.04)}"
         ".title{margin:0 0 8px;font-size:18px}.kpi{font-size:34px;font-weight:800;margin:6px 0}"
         ".row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}"
-        "canvas{width:100%;height:220px;background:#fafafa;border:1px solid #eee;border-radius:10px}"
+        "canvas{width:100%;height:240px;background:#fafafa;border:1px solid #eee;border-radius:10px}"
         "button{padding:8px 10px;border-radius:10px;border:1px solid #ddd;background:#fff}"
         ".mini .kpi{font-size:26px;margin:4px 0}"
         ".chips{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px}"
@@ -149,6 +148,9 @@ static void make_html_pro(char *out, size_t outsz) {
         ".chip[data-c='vermelho'] .dot{background:#fa5252}"
         ".chip.active{box-shadow:0 0 0 2px rgba(17,17,17,.08);border-color:#c9c9cf}"
         ".hint{font-size:12px;color:#666}"
+        ".pill{display:inline-flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid #e2e2e6;border-radius:999px;background:#fff;font-weight:700}"
+        ".pill .n{font-weight:900}"
+        ".col2{display:grid;grid-template-columns:1fr;gap:12px}@media(min-width:680px){.col2{grid-template-columns:1fr 1fr}}"
         "</style></head><body>"
         "<nav>"
           "<a href='/'>Profissional</a>"
@@ -163,61 +165,98 @@ static void make_html_pro(char *out, size_t outsz) {
           "<div class='chip' data-c='vermelho'><span class='dot'></span><span>Grupo Vermelho</span></div>"
         "</div>"
         "<div class='hint'>Filtre para analisar apenas um grupo de pulseira.</div>"
+
         "<div class=grid>"
+
           "<div class=card>"
-            "<div class=title>BPM (ao vivo / m&eacute;dia)</div>"
-            "<div id=bigBpm class=kpi>--</div>"
-            "<canvas id=line></canvas>"
+            "<div class=title>Ritmo (BPM) e check-ins</div>"
             "<div class=row>"
-              "<span id=nchip class='hint'>n=0</span>"
-              "<span id=ts class='hint'>--</span>"
-              "<button onclick='hist=[];drawLine()'>Limpar</button>"
-            "</div>"
-          "</div>"
-          "<div class=card>"
-            "<div class=title>Resumo</div>"
-            "<div class=row>"
-              "<div class=mini style='min-width:180px'>"
-                "<div style='font-size:12px;color:#666'>Ansiedade m&eacute;dia</div>"
-                "<div id=ans class=kpi>--</div>"
-                "<div style='font-size:12px;color:#666;margin-top:4px'>Energia m&eacute;dia</div>"
-                "<div id=ene class=kpi>--</div>"
-                "<div style='font-size:12px;color:#666;margin-top:4px'>Humor m&eacute;dio</div>"
-                "<div id=hum class=kpi>--</div>"
+              "<div style='min-width:180px' class=mini>"
+                "<div style='font-size:12px;color:#666'>BPM m&eacute;dio</div>"
+                "<div id=kpiBpm class=kpi>--</div>"
+                "<div style='font-size:12px;color:#666;margin-top:6px'>Check-ins (survey)</div>"
+                "<div id=kpiN class=kpi>0</div>"
+                "<div style='font-size:12px;color:#666;margin-top:6px'>Sim por pessoa (m&eacute;dia)</div>"
+                "<div id=kpiAvgYes class=kpi>--</div>"
               "</div>"
-              "<div style='flex:1'><canvas id=bars></canvas></div>"
+              "<div style='flex:1'><canvas id=chartBpm></canvas></div>"
             "</div>"
           "</div>"
+
+          "<div class=card>"
+            "<div class=title>Distribui&ccedil;&atilde;o por cor</div>"
+            "<canvas id=chartCores></canvas>"
+          "</div>"
+
+          "<div class=card>"
+            "<div class=title>Alertas chave</div>"
+            "<div class=row>"
+              "<span class=pill><span>Crise agora</span><span id=alCrisis class=n>0</span></span>"
+              "<span class=pill><span>Evita grupo</span><span id=alAvoid class=n>0</span></span>"
+              "<span class=pill><span>Quer falar</span><span id=alTalk class=n>0</span></span>"
+            "</div>"
+          "</div>"
+
+          "<div class='card'>"
+            "<div class=title>Necessidades basicas</div>"
+            "<div class=col2>"
+              "<div class=card style='border-color:#eee'><div>Sem refei&ccedil;&atilde;o recente</div><div id=basicMeal class=kpi>--</div></div>"
+              "<div class=card style='border-color:#eee'><div>Sem sono adequado</div><div id=basicSleep class=kpi>--</div></div>"
+            "</div>"
+          "</div>"
+
+          "<div class=card style='grid-column:1 / -1'>"
+            "<div class=title>Perguntas do question&aacute;rio (taxa de sim %)</div>"
+            "<canvas id=chartQs></canvas>"
+          "</div>"
+
         "</div>"
+
         "<script>"
         "let hist=[];const maxPts=180;let flt='all';"
-        "const L=document.getElementById('line'),B=document.getElementById('bars');"
-        "const lc=L.getContext('2d'),bc=B.getContext('2d');"
-        "function drawLine(){const w=L.clientWidth,h=L.clientHeight;L.width=w;L.height=h;"
-          "lc.clearRect(0,0,w,h);if(hist.length<2)return;"
-          "let mn=200,mx=40;for(const v of hist){if(v>0){mn=Math.min(mn,v);mx=Math.max(mx,v);}}"
-          "if(!isFinite(mn)||!isFinite(mx))return;if(mx-mn<5){mn=Math.max(20,mn-3);mx=mn+5;}"
-          "lc.beginPath();for(let i=0;i<hist.length;i++){const v=hist[i];if(v<=0)continue;"
-            "const x=i*(w-8)/(hist.length-1)+4;const y=h-4-(v-mn)/(mx-mn)*(h-8);"
-            "i?lc.lineTo(x,y):lc.moveTo(x,y);} lc.stroke();}"
-        "function drawBars(v,a,rm){const w=B.clientWidth,h=B.clientHeight;B.width=w;B.height=h;bc.clearRect(0,0,w,h);"
-          "const data=[v,a,rm],lbl=['Verde','Amarelo','Vermelho'];"
-          "const bw=Math.min(60,(w-40)/3),gap=(w-3*bw)/4;let x=gap;const M=Math.max(...data,1);"
-          "for(let i=0;i<3;i++){const val=data[i];const y=h-20;const bh=(val/M)*(h-50);"
-            "bc.fillRect(x,y-bh,bw,bh);bc.fillText(lbl[i],x,y+12);bc.fillText(String(val),x+bw/2-6,y-bh-6);x+=bw+gap;}}"
-        "function ts(){return new Date().toLocaleTimeString();}"
-        "function sel(c){flt=c;document.querySelectorAll('.chip').forEach(el=>{el.classList.toggle('active',el.dataset.c===c);});hist=[];drawLine();tick();}"
+        "const Cb=document.getElementById('chartBpm').getContext('2d');"
+        "const Cc=document.getElementById('chartCores').getContext('2d');"
+        "const Cq=document.getElementById('chartQs').getContext('2d');"
+        "const bpmCanvas=document.getElementById('chartBpm'), coreCanvas=document.getElementById('chartCores'), qsCanvas=document.getElementById('chartQs');"
+
+        "function drawLine(ctx,arr){const w=ctx.canvas.clientWidth,h=ctx.canvas.clientHeight;ctx.canvas.width=w;ctx.canvas.height=h;"
+          "ctx.clearRect(0,0,w,h);if(arr.length<2)return;let mn=200,mx=40;for(const v of arr){if(v>0){mn=Math.min(mn,v);mx=Math.max(mx,v);}}"
+          "if(!isFinite(mn)||!isFinite(mx))return;if(mx-mn<5){mn=Math.max(20,mn-3);mx=mn+5;}ctx.beginPath();"
+          "for(let i=0;i<arr.length;i++){const v=arr[i];if(v<=0)continue;const x=i*(w-8)/(arr.length-1)+4;const y=h-4-(v-mn)/(mx-mn)*(h-8);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}"
+
+        "function drawBars(ctx,data,labels){const w=ctx.canvas.clientWidth,h=ctx.canvas.clientHeight;ctx.canvas.width=w;ctx.canvas.height=h;"
+          "ctx.clearRect(0,0,w,h);const n=data.length;const bw=Math.min(60,(w-40)/n);const gap=(w-n*bw)/ (n+1);let x=gap;const M=Math.max(...data,1);"
+          "ctx.font='12px system-ui';for(let i=0;i<n;i++){const v=data[i];const y=h-22;const bh=(v/M)*(h-50);ctx.fillRect(x,y-bh,bw,bh);ctx.fillText(labels[i],x,y+14);ctx.fillText(String(v.toFixed?Math.round(v):v),x+bw/2-8,y-bh-6);x+=bw+gap;}}"
+
+        "function sel(c){flt=c;document.querySelectorAll('.chip').forEach(el=>{el.classList.toggle('active',el.dataset.c===c);});hist=[];tick();}"
         "document.getElementById('chips').addEventListener('click',e=>{const el=e.target.closest('.chip');if(!el)return;sel(el.dataset.c)});"
+
         "async function tick(){try{let url='/stats.json';if(flt!=='all'){url+='?color='+flt;}const r=await fetch(url,{cache:'no-store'});const s=await r.json();"
-            "const live=(s.bpm_live&&s.bpm_live>=20&&s.bpm_live<=250)?s.bpm_live:0;"
-            "const main=live||s.bpm_mean||0;"
-            "document.getElementById('bigBpm').textContent=main?main.toFixed(1):'--';"
-            "document.getElementById('ans').textContent=(s.ans_mean>0)?s.ans_mean.toFixed(2):'--';"
-            "document.getElementById('ene').textContent=(s.energy_mean>0)?s.energy_mean.toFixed(2):'--';"
-            "document.getElementById('hum').textContent=(s.humor_mean>0)?s.humor_mean.toFixed(2):'--';"
-            "document.getElementById('nchip').textContent='n='+s.bpm_n;document.getElementById('ts').textContent=ts();"
-            "const plotted=live||s.bpm_mean||0; if(plotted){hist.push(plotted); if(hist.length>maxPts)hist.shift(); drawLine();}"
-            "drawBars(s.cores.verde||0,s.cores.amarelo||0,s.cores.vermelho||0);"
+            "const live=(s.bpm_live&&s.bpm_live>=20&&s.bpm_live<=250)?s.bpm_live:0;const main=live||s.bpm_mean||0;"
+            "document.getElementById('kpiBpm').textContent=main?main.toFixed(1):'--';"
+            "const plotted=live||s.bpm_mean||0;if(plotted){hist.push(plotted);if(hist.length>maxPts)hist.shift();}drawLine(Cb,hist);"
+
+            // cores
+            "drawBars(Cc,[s.cores.verde||0,s.cores.amarelo||0,s.cores.vermelho||0],['Verde','Amarelo','Vermelho']);"
+
+            // survey
+            "const sv=s.survey||{};const n=sv.n||0;const yes=sv.yes||[];const rate=sv.rate||[];const avg=sv.avg_yes||0;"
+            "document.getElementById('kpiN').textContent=String(n);"
+            "document.getElementById('kpiAvgYes').textContent=avg? (Math.round(avg*100)/100).toFixed(2):'--';"
+
+            // alertas (indices: 7=crise, 8=evita, 9=quer falar)
+            "document.getElementById('alCrisis').textContent=String((yes[7]||0));"
+            "document.getElementById('alAvoid').textContent=String((yes[8]||0));"
+            "document.getElementById('alTalk').textContent=String((yes[9]||0));"
+
+            // basicos: nao comeu = n-yes[1], nao dormiu = n-yes[2]
+            "document.getElementById('basicMeal').textContent=(n?(n-(yes[1]||0)):0);"
+            "document.getElementById('basicSleep').textContent=(n?(n-(yes[2]||0)):0);"
+
+            // barras de % de sim (0..100)
+            "const lbl=['Dor','Comeu','Dormiu','Fadiga','Conflito','Nervoso','Concentracao','Crise','Evita','Falar'];"
+            "const perc=rate.map(v=>v*100);"
+            "drawBars(Cq,perc,lbl);"
           "}catch(e){}}"
         "setInterval(tick,1000); tick();"
         "</script></body></html>";
@@ -274,9 +313,9 @@ static void make_html_display(char *out, size_t outsz) {
         "let last=['','','',''];"
         "function esc(t){return (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}"
         "function colorize(t){let x=esc(t||'');"
-          "x=x.replace(/\\b(VERDE|Verde)\\b/g,'<span class=\"tag green\">$1</span>');"
-          "x=x.replace(/\\b(AMARELA|Amarela|AMARELO|Amarelo)\\b/g,'<span class=\"tag yellow\">$1</span>');"
-          "x=x.replace(/\\b(VERMELHA|Vermelha|VERMELHO|Vermelho)\\b/g,'<span class=\"tag red\">$1</span>');"
+          "x=x.replace(/\\b(VERDE|Verde)\\b/g,'<span class=tag green>$1</span>');"
+          "x=x.replace(/\\b(AMARELA|Amarela|AMARELO|Amarelo)\\b/g,'<span class=tag yellow>$1</span>');"
+          "x=x.replace(/\\b(VERMELHA|Vermelha|VERMELHO|Vermelho)\\b/g,'<span class=tag red>$1</span>');"
           "return x;}"
         "async function pollSurvey(){try{const r=await fetch('/survey_state.json',{cache:'no-store'});const s=await r.json();if(s&&s.mode===1){location.replace('/survey');}}catch(e){}}"
         "async function tick(){try{const r=await fetch('/oled.json',{cache:'no-store'});const s=await r.json();const arr=[s.l1||'',s.l2||'',s.l3||'',s.l4||''];"
@@ -296,7 +335,6 @@ static void make_html_display(char *out, size_t outsz) {
 
 /* ---------- HTML: Survey (/survey) ---------- */
 static void make_html_survey(char *out, size_t outsz) {
-    // Se modo survey estiver desligado, oferece um "voltar" para o display
     const char *body_prefix =
         "<!doctype html><html lang=pt-br><head><meta charset=utf-8>"
         "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -325,10 +363,10 @@ static void make_html_survey(char *out, size_t outsz) {
         "<div class=q><div class=lbl>Dormiu bem?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
         "<div class=q><div class=lbl>Sente fadiga forte agora?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
         "<div class=q><div class=lbl>Teve conflito forte com alguem?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
-        "<div class=q><div class=lbl>Se sentiu muito nervoso(a) hoje?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
-        "<div class=q><div class=lbl>Teve dificuldade de concentrar nas ultimas horas?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
-        "<div class=q><div class=lbl>Sente risco de ter uma crise agora?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
-        "<div class=q><div class=lbl>Esta evitando estar com o grupo hoje?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Se sentiu muito nervoso hoje?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Teve dificuldade de concentrar?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Sente risco de crise agora?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
+        "<div class=q><div class=lbl>Esta evitando ficar com o grupo?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
         "<div class=q><div class=lbl>Quer falar com um adulto apos o check-in?</div><div class=btns><span class=chip data-v='1'>Sim</span><span class=chip data-v='0'>Nao</span></div></div>"
         "</div>"
         "<div class=row>"
@@ -339,21 +377,8 @@ static void make_html_survey(char *out, size_t outsz) {
         "<script>"
         "const chips=[...document.querySelectorAll('.chip')];"
         "const vals=new Array(10).fill(-1);"
-        "chips.forEach((c,idx)=>{"
-          "c.addEventListener('click',()=>{"
-            "const v=c.dataset.v; const q=Math.floor(chips.indexOf?chips.indexOf(c)/2:idx/2);"
-            "const qi=Math.floor(idx/2);"
-            "vals[qi]=Number(v);"
-            "const sibs=c.parentElement.querySelectorAll('.chip');"
-            "sibs.forEach(s=>s.style.outline='');"
-            "c.style.outline='2px solid #2d6cdf';"
-          "});"
-        "});"
-        "document.getElementById('send').onclick=()=>{"
-          "if(vals.some(v=>v<0)){alert('Responda todas as perguntas.');return;}"
-          "const bits=vals.map(v=>v?1:0).join('');"
-          "location.replace('/survey_submit?ans='+bits);"
-        "};"
+        "chips.forEach((c,idx)=>{c.addEventListener('click',()=>{const qi=Math.floor(idx/2);vals[qi]=Number(c.dataset.v);const sibs=c.parentElement.querySelectorAll('.chip');sibs.forEach(s=>s.style.outline='');c.style.outline='2px solid #2d6cdf';});});"
+        "document.getElementById('send').onclick=()=>{if(vals.some(v=>v<0)){alert('Responda todas as perguntas.');return;}const bits=vals.map(v=>v?1:0).join('');location.replace('/survey_submit?ans='+bits);};"
         "</script>";
 
     const char *body_closed =
@@ -397,32 +422,63 @@ static void make_json_stats(char *out, size_t outsz, const char *req_line) {
     else     stats_get_snapshot(&s);
 
     float bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.f : s.bpm_mean_trimmed;
-    float ans_mean = isnan(s.ans_mean) ? 0.f : s.ans_mean;
-    float ene_mean = isnan(s.energy_mean) ? 0.f : s.energy_mean;
-    float hum_mean = isnan(s.humor_mean) ? 0.f : s.humor_mean;
-
     const float bpm_live = 0.f;
+
+    // Monta corpo JSON em buffer local para facilitar arrays
+    char body[7000]; size_t off = 0;
+    #define APPEND(...) off += (size_t)snprintf(body+off, sizeof(body)-off, __VA_ARGS__)
+    APPEND("{");
+    APPEND("\"bpm_live\":%.3f,", bpm_live);
+    APPEND("\"bpm_mean\":%.3f,\"bpm_n\":%lu,", bpm_mean, (unsigned long)s.bpm_count);
+    APPEND("\"cores\":{\"verde\":%lu,\"amarelo\":%lu,\"vermelho\":%lu},",
+           (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho);
+
+    // Survey
+    APPEND("\"survey\":{");
+    APPEND("\"n\":%lu,", (unsigned long)s.survey_n);
+    // yes[]
+    APPEND("\"yes\":[");
+    for (int i=0;i<10;i++){ APPEND("%lu", (unsigned long)s.survey_yes[i]); if (i<9) APPEND(","); }
+    APPEND("],");
+
+    // rate[] (0..1)
+    APPEND("\"rate\":[");
+    for (int i=0;i<10;i++){
+        float rate = (s.survey_n ? (float)s.survey_yes[i]/(float)s.survey_n : 0.f);
+        APPEND("%.4f", rate);
+        if (i<9) APPEND(",");
+    }
+    APPEND("],");
+
+    // média de "sim" por pessoa (0..10)
+    float avg_yes = 0.f;
+    if (s.survey_n) {
+        uint32_t sum=0; for (int i=0;i<10;i++) sum += s.survey_yes[i];
+        avg_yes = (float)sum / (float)s.survey_n;
+    }
+    APPEND("\"avg_yes\":%.3f,", avg_yes);
+
+    // alertas chave
+    uint32_t al_crisis = s.survey_yes[7];
+    uint32_t al_avoid  = s.survey_yes[8];
+    uint32_t al_talk   = s.survey_yes[9];
+    APPEND("\"alerts\":{\"crisis\":%lu,\"avoid\":%lu,\"talk\":%lu},",
+           (unsigned long)al_crisis,(unsigned long)al_avoid,(unsigned long)al_talk);
+
+    // basicos: nao comeu = n-yes[1]; nao dormiu = n-yes[2]
+    uint32_t basic_meal  = (s.survey_n >= s.survey_yes[1] ? s.survey_n - s.survey_yes[1] : 0);
+    uint32_t basic_sleep = (s.survey_n >= s.survey_yes[2] ? s.survey_n - s.survey_yes[2] : 0);
+    APPEND("\"basic\":{\"no_meal\":%lu,\"poor_sleep\":%lu}", (unsigned long)basic_meal, (unsigned long)basic_sleep);
+
+    APPEND("}"); // fecha survey
+    APPEND("}"); // fecha raiz
+    #undef APPEND
 
     snprintf(out, outsz,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: application/json; charset=UTF-8\r\n"
         "Cache-Control: no-store\r\n"
-        "Connection: close\r\n\r\n"
-        "{"
-          "\"bpm_live\":%.3f,"
-          "\"bpm_mean\":%.3f,\"bpm_n\":%lu,"
-          "\"cores\":{\"verde\":%lu,\"amarelo\":%lu,\"vermelho\":%lu},"
-          "\"ans_mean\":%.3f,\"ans_n\":%lu,"
-          "\"energy_mean\":%.3f,\"energy_n\":%lu,"
-          "\"humor_mean\":%.3f,\"humor_n\":%lu"
-        "}",
-        bpm_live,
-        bpm_mean, (unsigned long)s.bpm_count,
-        (unsigned long)s.cor_verde, (unsigned long)s.cor_amarelo, (unsigned long)s.cor_vermelho,
-        ans_mean, (unsigned long)s.ans_count,
-        ene_mean, (unsigned long)s.energy_count,
-        hum_mean, (unsigned long)s.humor_count
-    );
+        "Connection: close\r\n\r\n%s", body);
 }
 
 /* ---------- JSON: OLED (/oled.json) ---------- */
@@ -439,27 +495,6 @@ static void make_json_oled(char *out, size_t outsz) {
           "\"l4\":\"%s\""
         "}",
         g_oled.l1, g_oled.l2, g_oled.l3, g_oled.l4
-    );
-}
-
-/* ---------- CSV fallback (antigo) ---------- */
-static size_t dump_csv_fallback(char *out, size_t maxlen) {
-    stats_snapshot_t s; stats_get_snapshot(&s);
-    double bpm_mean = isnan(s.bpm_mean_trimmed) ? 0.0 : s.bpm_mean_trimmed;
-    double ans_mean = isnan(s.ans_mean)         ? 0.0 : s.ans_mean;
-    double ene_mean = isnan(s.energy_mean)      ? 0.0 : s.energy_mean;
-    double hum_mean = isnan(s.humor_mean)       ? 0.0 : s.humor_mean;
-
-    return snprintf(out, maxlen,
-        "bpm_mean,bpm_n,ans_mean,ans_n,energy_mean,energy_n,humor_mean,humor_n,verde,amarelo,vermelho\r\n"
-        "%.3f,%lu,%.3f,%lu,%.3f,%lu,%.3f,%lu,%lu,%lu,%lu\r\n",
-        bpm_mean,  (unsigned long)s.bpm_count,
-        ans_mean,  (unsigned long)s.ans_count,
-        ene_mean,  (unsigned long)s.energy_count,
-        hum_mean,  (unsigned long)s.humor_count,
-        (unsigned long)s.cor_verde,
-        (unsigned long)s.cor_amarelo,
-        (unsigned long)s.cor_vermelho
     );
 }
 
@@ -483,7 +518,6 @@ static void make_csv(char *out, size_t outsz) {
 
 /* ---------- HTTP ---------- */
 static void make_redirect_display(char *out, size_t outsz) {
-    // 303 + fallback HTML (melhor comportamento em navegadores embarcados)
     snprintf(out, outsz,
         "HTTP/1.1 303 See Other\r\n"
         "Location: /display\r\n"
@@ -502,17 +536,15 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
     tcp_recved(tpcb, p->tot_len);
     pbuf_free(p);
 
-    // Checagens de rota (use memcmp com tamanho EXATO da "prefix string")
-    bool want_stats        = (memcmp(req, "GET /stats.json",   15) == 0);
-    bool want_oled         = (memcmp(req, "GET /oled.json",    14) == 0);
-    bool want_display      = (memcmp(req, "GET /display",      12) == 0);
-    bool want_csv          = (memcmp(req, "GET /download.csv", 17) == 0);
-    bool want_survey       = (memcmp(req, "GET /survey",       11) == 0); // vale também para "/survey HTTP/1.1"
-    bool want_survey_state = (memcmp(req, "GET /survey_state.json", 22) == 0);
-    bool want_submit       = (memcmp(req, "GET /survey_submit", 18) == 0); // *** conserta o bug do 19 vs 18 ***
+    bool want_stats        = (memcmp(req, "GET /stats.json",         15) == 0);
+    bool want_oled         = (memcmp(req, "GET /oled.json",          14) == 0);
+    bool want_display      = (memcmp(req, "GET /display",            12) == 0);
+    bool want_csv          = (memcmp(req, "GET /download.csv",       17) == 0);
+    bool want_survey       = (memcmp(req, "GET /survey",             11) == 0);
+    bool want_survey_state = (memcmp(req, "GET /survey_state.json",  22) == 0);
+    bool want_submit       = (memcmp(req, "GET /survey_submit",      18) == 0);
 
     if (want_submit) {
-        // Parse ans=########## (10 bits)
         const char *a = strstr(req, "ans=");
         char tmp[12] = {0};
         if (a) {
@@ -525,7 +557,7 @@ static err_t http_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t
             strncpy((char*)s_survey_ans, tmp, sizeof s_survey_ans - 1);
             s_survey_ans[10] = '\0';
             s_survey_has  = true;
-            s_survey_mode = false; // encerra o modo survey
+            s_survey_mode = false;
         }
         make_redirect_display(g_resp, sizeof g_resp);
     }
